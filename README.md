@@ -1,6 +1,6 @@
-# 📈 A股模拟交易系统
+# 🥬 韭菜模拟器 (RealStock)
 
-一个功能完整的 A 股模拟交易系统，支持历史行情回放、实时交易模拟、挑战模式、成就系统和排行榜。
+一个功能完整的 A 股模拟交易系统，支持历史行情回放、实时交易模拟、挑战模式、成就系统和排行榜。在这里体验股市的酸甜苦辣，成为一棵坚强的韭菜！
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-green.svg)
@@ -28,12 +28,20 @@
 
 ## 🖼️ 界面预览
 
-系统包含以下主要界面：
-- 首页：存档管理、挑战选择
-- 交易界面：K线图、分时图、交易面板、持仓列表
-- 资产界面：收益曲线、资产统计
-- 成就界面：成就展示、进度追踪
-- 排行榜：多维度排名
+### 首页 - 存档管理
+![首页](readme_assets/mainPage.png)
+
+### 交易界面 - K线图与分时图
+![交易界面](readme_assets/main1.png)
+
+### 资产界面 - 收益曲线
+![资产界面](readme_assets/main2.png)
+
+### 成就系统
+![成就系统](readme_assets/main3.png)
+
+### 挑战模式
+![挑战模式](readme_assets/challenges.png)
 
 ## 🚀 快速开始
 
@@ -47,8 +55,8 @@
 
 1. **克隆项目**
 ```bash
-git clone https://github.com/your-username/stock-trading-simulator.git
-cd stock-trading-simulator
+git clone https://github.com/Andrew82106/RealStock.git
+cd RealStock
 ```
 
 2. **安装后端依赖**
@@ -107,7 +115,7 @@ npm run dev
 ## 🏗️ 项目结构
 
 ```
-stock-trading-simulator/
+realstock/
 ├── api/                    # 后端 API
 │   ├── routers/           # API 路由
 │   │   ├── game.py        # 游戏控制
@@ -219,3 +227,51 @@ pytest --cov=src --cov=api
 - [AkShare](https://github.com/akfamily/akshare) - 提供 A 股数据接口
 - [Ant Design](https://ant.design/) - 优秀的 React UI 组件库
 - [ECharts](https://echarts.apache.org/) - 强大的图表库
+│   │   └── models.py
+│   ├── playback/         # 播放引擎模块
+│   │   ├── engine.py
+│   │   └── models.py
+│   ├── simulator/        # 模拟器模块
+│   │   └── simulator.py
+│   └── exceptions.py     # 自定义异常
+├── tests/
+│   ├── unit/             # 单元测试
+│   ├── property/         # 属性测试
+│   └── integration/      # 集成测试
+├── examples/
+│   ├── simple_backtest.py    # 简单回测示例
+│   └── interactive_play.py   # 交互式播放示例
+├── data_cache/           # 数据缓存目录
+├── pyproject.toml        # 项目配置
+└── README.md             # 项目说明
+```
+
+## 测试
+
+```bash
+# 运行所有测试
+pytest
+
+# 运行单元测试
+pytest tests/unit/
+
+# 运行属性测试
+pytest tests/property/
+
+# 运行集成测试
+pytest tests/integration/
+
+# 运行测试并显示覆盖率
+pytest --cov=src
+```
+
+## 注意事项
+
+1. **数据获取**: 首次运行需要从 AkShare 下载数据，请确保网络连接正常
+2. **数据缓存**: 下载的数据会缓存到本地，后续运行会更快
+3. **API 限制**: AkShare 可能有访问频率限制，建议不要频繁请求大量数据
+4. **分时数据**: 历史分时数据可能不可用，系统会基于日线数据模拟生成
+
+## 许可证
+
+MIT License
