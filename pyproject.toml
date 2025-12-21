@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stock-trading-simulator"
+name = "realstock"
 version = "0.1.0"
-description = "A股模拟交易回测系统 - A-share stock trading simulator and backtesting system"
+description = "韭菜模拟器 - A股模拟交易系统 (RealStock - A-share stock trading simulator)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

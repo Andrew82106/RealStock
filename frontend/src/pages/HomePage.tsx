@@ -227,10 +227,10 @@ export default function HomePage() {
           </Button>
           
           <Title level={2} style={{ color: '#fff', marginBottom: 8 }}>
-            📈 A股模拟交易系统
+            🥬 韭菜模拟器
           </Title>
           <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 16 }}>
-            选择一个存档继续游戏，或创建新的存档开始交易之旅
+            在这里体验股市的酸甜苦辣，成为一棵坚强的韭菜！
           </Text>
         </div>
 
