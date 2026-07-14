@@ -140,54 +140,99 @@ class DataEngine:
         pure_code, market = self.normalize_code(code)
         
         # 尝试从缓存加载
-        cached_data = self._load_from_cache(pure_code, start_date, end_date)
+        cached_data = self._load_from_cache(pure_code, start_date, end_date, adjust)
         if cached_data is not None:
             return cached_data
         
-        # 从 AkShare 获取数据
+        # 从 AkShare 获取数据（东方财富接口，失败时回退到腾讯接口）
         try:
-            import akshare as ak
-            
-            # 构建完整代码
-            full_code = f"{market}{pure_code}"
-            
-            # 调用 AkShare API
-            df = ak.stock_zh_a_hist(
-                symbol=pure_code,
-                period="daily",
-                start_date=start_date.strftime("%Y%m%d"),
-                end_date=end_date.strftime("%Y%m%d"),
-                adjust=adjust
-            )
-            
-            if df.empty:
-                return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-            
-            # 重命名列以匹配设计
-            df = df.rename(columns={
-                "日期": "date",
-                "开盘": "open",
-                "最高": "high",
-                "最低": "low",
-                "收盘": "close",
-                "成交量": "volume"
-            })
-            
-            # 只保留需要的列
-            df = df[["date", "open", "high", "low", "close", "volume"]]
-            
-            # 确保 date 列是日期类型
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-            
-            # 保存到缓存
-            self._save_to_cache(pure_code, df)
-            
-            return df
-            
+            df = self._fetch_daily_from_eastmoney(pure_code, start_date, end_date, adjust)
         except InvalidStockCodeError:
             raise
-        except Exception as e:
-            raise DataFetchError(f"获取股票 {code} 日线数据失败: {str(e)}") from e
+        except Exception as em_error:
+            try:
+                df = self._fetch_daily_from_tencent(pure_code, market, start_date, end_date, adjust)
+            except Exception as tx_error:
+                raise DataFetchError(
+                    f"获取股票 {code} 日线数据失败: "
+                    f"东方财富接口: {str(em_error)}; 腾讯接口: {str(tx_error)}"
+                ) from tx_error
+
+        if df.empty:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+        # 保存到缓存
+        self._save_to_cache(pure_code, df, adjust)
+
+        return df
+
+    def _fetch_daily_from_eastmoney(
+        self,
+        pure_code: str,
+        start_date: date,
+        end_date: date,
+        adjust: str
+    ) -> pd.DataFrame:
+        """从东方财富接口获取日线数据（AkShare stock_zh_a_hist）。"""
+        import akshare as ak
+
+        df = ak.stock_zh_a_hist(
+            symbol=pure_code,
+            period="daily",
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            adjust=adjust
+        )
+
+        if df.empty:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+        # 重命名列以匹配设计
+        df = df.rename(columns={
+            "日期": "date",
+            "开盘": "open",
+            "最高": "high",
+            "最低": "low",
+            "收盘": "close",
+            "成交量": "volume"
+        })
+
+        # 只保留需要的列
+        df = df[["date", "open", "high", "low", "close", "volume"]]
+
+        # 确保 date 列是日期类型
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+
+        return df
+
+    def _fetch_daily_from_tencent(
+        self,
+        pure_code: str,
+        market: str,
+        start_date: date,
+        end_date: date,
+        adjust: str
+    ) -> pd.DataFrame:
+        """从腾讯接口获取日线数据（AkShare stock_zh_a_hist_tx），作为东方财富的回退数据源。"""
+        import akshare as ak
+
+        df = ak.stock_zh_a_hist_tx(
+            symbol=f"{market}{pure_code}",
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            adjust=adjust
+        )
+
+        if df.empty:
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+        # 腾讯接口返回列: date, open, close, high, low, amount（成交量，单位: 手）
+        df = df.rename(columns={"amount": "volume"})
+
+        df = df[["date", "open", "high", "low", "close", "volume"]]
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+
+        return df
     
     def get_intraday_data(
         self,
@@ -391,9 +436,10 @@ class DataEngine:
         except Exception:
             pass
     
-    def _get_cache_path(self, code: str) -> Path:
-        """获取日线数据缓存文件路径"""
-        return self.cache_dir / f"{code}.csv"
+    def _get_cache_path(self, code: str, adjust: str = "qfq") -> Path:
+        """获取日线数据缓存文件路径（按复权方式区分，避免混用）"""
+        suffix = adjust if adjust else "raw"
+        return self.cache_dir / f"{code}_{suffix}.csv"
     
     def _get_intraday_cache_path(self, code: str, trade_date: date) -> Path:
         """获取分时数据缓存文件路径"""
@@ -403,20 +449,22 @@ class DataEngine:
         self,
         code: str,
         start_date: date,
-        end_date: date
+        end_date: date,
+        adjust: str = "qfq"
     ) -> Optional[pd.DataFrame]:
         """
         从本地缓存加载数据。
-        
+
         Args:
             code: 股票代码（纯数字）
             start_date: 起始日期
             end_date: 结束日期
-            
+            adjust: 复权类型（缓存按复权方式区分）
+
         Returns:
             DataFrame 或 None（如果缓存不存在）
         """
-        cache_path = self._get_cache_path(code)
+        cache_path = self._get_cache_path(code, adjust)
         
         if not cache_path.exists():
             return None
@@ -441,18 +489,19 @@ class DataEngine:
             cache_path.unlink(missing_ok=True)
             return None
     
-    def _save_to_cache(self, code: str, data: pd.DataFrame) -> None:
+    def _save_to_cache(self, code: str, data: pd.DataFrame, adjust: str = "qfq") -> None:
         """
         保存数据到本地缓存。
-        
+
         Args:
             code: 股票代码（纯数字）
             data: 要保存的数据
+            adjust: 复权类型（缓存按复权方式区分）
         """
         if data.empty:
             return
-        
-        cache_path = self._get_cache_path(code)
+
+        cache_path = self._get_cache_path(code, adjust)
         
         try:
             # 如果缓存已存在，合并数据

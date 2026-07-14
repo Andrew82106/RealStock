@@ -1,0 +1,4 @@
+order_id,order_date,code,order_type,price,quantity,status,filled_price,filled_quantity,fee,reject_reason
+272a641f,2024-09-25,002583,buy,5.7426,17300,filled,5.7426,17300,24.836745000000004,
+253c2e07,2024-10-10,002583,sell,7.5015,17300,filled,7.5015,17300,97.3319625,
+0445082e,2024-10-11,002583,buy,8.236,15800,filled,8.236,15800,32.5322,

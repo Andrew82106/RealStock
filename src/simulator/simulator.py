@@ -341,11 +341,15 @@ class Simulator:
         while True:
             # 获取当日行情
             current_bars = self.get_current_bars()
-            
+
             if current_bars:
                 # 更新持仓价格
                 self._update_position_prices()
-                
+
+                # 检查历史挂单能否以当日收盘价成交
+                close_prices = {code: bar.close for code, bar in current_bars.items()}
+                self.trading_engine.check_pending_orders(close_prices)
+
                 # 调用策略函数
                 trade_instructions = strategy(
                     self.current_date,
@@ -394,7 +398,7 @@ class Simulator:
                     price=price,
                     quantity=quantity,
                     current_date=self.current_date,
-                    daily_bar=daily_bar
+                    current_price=daily_bar.close if daily_bar else None
                 )
             elif order_type == "sell" or order_type == OrderType.SELL:
                 self.trading_engine.submit_sell_order(
@@ -402,7 +406,7 @@ class Simulator:
                     price=price,
                     quantity=quantity,
                     current_date=self.current_date,
-                    daily_bar=daily_bar
+                    current_price=daily_bar.close if daily_bar else None
                 )
 
     

@@ -1,0 +1,44 @@
+{
+  "golden": {
+    "tag": "300085_bt3_st5_golden",
+    "start": "2024-08-29",
+    "end": "2024-10-09",
+    "trading_days": 23,
+    "final_assets": 541755.4,
+    "total_return_pct": 441.76,
+    "max_drawdown_pct": 2.88,
+    "peak_assets": 541755.4,
+    "peak_date": "2024-10-09",
+    "win_rate_pct": 0.0,
+    "total_trades": 0,
+    "filled_orders": 1
+  },
+  "full_arc": {
+    "tag": "300085_bt3_st5_full_arc",
+    "start": "2024-08-29",
+    "end": "2026-07-14",
+    "trading_days": 451,
+    "final_assets": 699452.28,
+    "total_return_pct": 599.45,
+    "max_drawdown_pct": 42.01,
+    "peak_assets": 887307.45,
+    "peak_date": "2025-09-17",
+    "win_rate_pct": 62.5,
+    "total_trades": 24,
+    "filled_orders": 48
+  },
+  "forward": {
+    "tag": "300085_bt3_st5_forward",
+    "start": "2024-10-10",
+    "end": "2026-07-14",
+    "trading_days": 428,
+    "final_assets": 161214.86,
+    "total_return_pct": 61.21,
+    "max_drawdown_pct": 41.8,
+    "peak_assets": 204092.94,
+    "peak_date": "2025-09-17",
+    "win_rate_pct": 60.87,
+    "total_trades": 23,
+    "filled_orders": 46
+  }
+}

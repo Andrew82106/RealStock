@@ -1,0 +1,4 @@
+order_id,order_date,code,order_type,price,quantity,status,filled_price,filled_quantity,fee,reject_reason
+5a3f55eb,2024-04-02,300641,buy,4.6904,21200,filled,4.6904,21200,24.859120000000004,
+c110c187,2024-04-23,300641,sell,12.2703,21200,filled,12.2703,21200,195.09777,
+b09f35da,2024-04-24,300641,buy,13.1626,19700,filled,13.1626,19700,64.825805,
