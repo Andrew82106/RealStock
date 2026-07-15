@@ -133,8 +133,8 @@ class TestBuyOrderFundValidation:
         
         assert order.status == OrderStatus.REJECTED, \
             f"资金不足时订单应被拒绝: cash={account.cash}, total_cost={total_cost}"
-        assert order.reject_reason == "资金不足", \
-            f"拒绝原因应为'资金不足': 实际 '{order.reject_reason}'"
+        assert order.reject_reason == "可用资金不足", \
+            f"拒绝原因应为'可用资金不足': 实际 '{order.reject_reason}'"
 
 
 
@@ -407,8 +407,8 @@ class TestSellOrderPositionValidation:
         
         assert order.status == OrderStatus.REJECTED, \
             f"持仓不足时订单应被拒绝: position={position.quantity}, sell={sell_quantity}"
-        assert order.reject_reason == "持仓不足", \
-            f"拒绝原因应为'持仓不足': 实际 '{order.reject_reason}'"
+        assert order.reject_reason.startswith("可卖数量不足"), \
+            f"拒绝原因应为'可卖数量不足': 实际 '{order.reject_reason}'"
     
     @settings(max_examples=100)
     @given(
@@ -441,8 +441,8 @@ class TestSellOrderPositionValidation:
         
         assert order.status == OrderStatus.REJECTED, \
             f"无持仓时订单应被拒绝"
-        assert order.reject_reason == "持仓不足", \
-            f"拒绝原因应为'持仓不足': 实际 '{order.reject_reason}'"
+        assert order.reject_reason == "无持仓", \
+            f"拒绝原因应为'无持仓': 实际 '{order.reject_reason}'"
 
 
 

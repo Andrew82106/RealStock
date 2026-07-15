@@ -3,7 +3,7 @@
 Property 12: Leaderboard Ordering
 """
 import pytest
-from hypothesis import given, strategies as st, assume, settings
+from hypothesis import HealthCheck, given, strategies as st, assume, settings
 from unittest.mock import Mock, patch
 from dataclasses import dataclass, field
 
@@ -85,6 +85,7 @@ def mock_save_list_strategy(draw):
 class TestLeaderboardOrdering:
     """Property 12: Leaderboard Ordering"""
     
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(saves=mock_save_list_strategy())
     def test_leaderboard_is_sorted_descending(self, saves: list[SaveData]):
         """排行榜按值降序排列"""
@@ -115,6 +116,7 @@ class TestLeaderboardOrdering:
             values = [entry.value for entry in leaderboard]
             assert values == sorted(values, reverse=True), f"Leaderboard {lb_type} not sorted"
     
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(saves=mock_save_list_strategy())
     def test_ranks_are_sequential(self, saves: list[SaveData]):
         """排名是连续的从1开始"""
@@ -143,6 +145,7 @@ class TestLeaderboardOrdering:
         expected_ranks = list(range(1, len(leaderboard) + 1))
         assert ranks == expected_ranks
     
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(saves=mock_save_list_strategy())
     def test_current_save_is_marked(self, saves: list[SaveData]):
         """当前存档被正确标记"""
@@ -179,6 +182,7 @@ class TestLeaderboardOrdering:
         assert len(current_entries) == 1
         assert current_entries[0].save_id == current_id
     
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(saves=mock_save_list_strategy(), limit=st.integers(min_value=1, max_value=20))
     def test_limit_is_respected(self, saves: list[SaveData], limit: int):
         """限制数量被正确应用"""

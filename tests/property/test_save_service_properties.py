@@ -506,7 +506,8 @@ class TestSaveListCompleteness:
     """
     
     @settings(max_examples=50)
-    @given(names=st.lists(valid_save_name(), min_size=1, max_size=5, unique=True))
+    # Windows 文件系统大小写不敏感，存档名需按小写去重，否则 "H" 和 "h" 会指向同一文件
+    @given(names=st.lists(valid_save_name(), min_size=1, max_size=5, unique_by=lambda n: n.lower()))
     def test_list_saves_returns_all_saves(self, names: list[str]):
         """
         验证列出存档返回所有存档。
@@ -535,7 +536,8 @@ class TestSaveListCompleteness:
             shutil.rmtree(temp_dir, ignore_errors=True)
     
     @settings(max_examples=50)
-    @given(names=st.lists(valid_save_name(), min_size=1, max_size=5, unique=True))
+    # Windows 文件系统大小写不敏感，存档名需按小写去重，否则 "H" 和 "h" 会指向同一文件
+    @given(names=st.lists(valid_save_name(), min_size=1, max_size=5, unique_by=lambda n: n.lower()))
     def test_list_saves_has_required_fields(self, names: list[str]):
         """
         验证存档元数据包含所有必需字段。

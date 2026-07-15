@@ -426,26 +426,21 @@ class TestIntradayPlaybackFlow:
         )
         
         simulator.start_day()
-        
-        # Try to buy in IDLE state (should fail)
-        with pytest.raises(InvalidOrderError) as exc_info:
-            simulator.buy("600519", 1510.0, 100)
-        assert "暂停状态" in str(exc_info.value)
-        
+
         # Start playing
         simulator.play()
-        
+
         # Try to buy in PLAYING state (should fail)
         with pytest.raises(InvalidOrderError) as exc_info:
             simulator.buy("600519", 1510.0, 100)
-        assert "暂停状态" in str(exc_info.value)
-        
+        assert "播放中无法交易" in str(exc_info.value)
+
         # Pause and try to buy (should succeed)
         simulator.pause()
-        
-        # Now trading should work
+
+        # Now trading should work (order fills or rests as pending)
         order = simulator.buy("600519", 1510.0, 100)
-        assert order.status == OrderStatus.FILLED
+        assert order.status in (OrderStatus.FILLED, OrderStatus.PENDING)
     
     def test_tick_progression(self):
         """Test tick progression during playback."""
@@ -610,4 +605,4 @@ class TestEdgeCases:
         )
         
         assert sell_order.status == OrderStatus.REJECTED
-        assert "持仓不足" in sell_order.reject_reason
+        assert "可卖数量不足" in sell_order.reject_reason

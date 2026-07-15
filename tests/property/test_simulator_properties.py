@@ -116,15 +116,16 @@ class MockDataEngine:
 
 class TestTradingStateRestriction:
     """
-    Property 11: 交易仅在暂停状态可用
-    Feature: stock-trading-simulator, Property 11: 交易仅在暂停状态可用
+    Property 11: 交易状态限制
+    Feature: stock-trading-simulator, Property 11: 交易状态限制
     **Validates: Requirements 6.3**
-    
-    验证非暂停状态下交易抛出错误：
-    - 如果播放状态不是 PAUSED，应抛出错误
-    - 如果播放状态是 PAUSED，应正常处理订单
+
+    验证交易状态限制（2026-07 契约更新：与前端和挂单模型对齐）：
+    - PLAYING / FINISHED 状态下交易应抛出错误
+    - IDLE / PAUSED / DAY_ENDED 状态下应正常处理订单
+      （DAY_ENDED 允许交易对应真实券商的收盘后挂单）
     """
-    
+
     @settings(max_examples=100)
     @given(
         initial_cash=cash_amounts,
@@ -132,47 +133,35 @@ class TestTradingStateRestriction:
         quantity=quantities,
         code=stock_codes
     )
-    def test_buy_raises_error_when_not_paused(
+    def test_buy_raises_error_when_not_tradable(
         self, initial_cash: float, price: float, quantity: int, code: str
     ):
         """
-        验证非暂停状态下买入抛出错误。
-        
+        验证播放中和播放结束状态下买入抛出错误。
+
         *For any* 交易操作（买入）：
-        如果播放状态不是 PAUSED，应抛出错误
+        如果播放状态是 PLAYING 或 FINISHED，应抛出错误
         """
         data_engine = MockDataEngine()
         simulator = Simulator(data_engine, initial_cash=initial_cash)
-        
+
         start_date = date(2024, 1, 2)
         end_date = date(2024, 1, 31)
         simulator.setup([code], start_date, end_date)
         simulator.start_day()
-        
-        # 测试 IDLE 状态
-        simulator.playback_engine.state = PlaybackState.IDLE
-        with pytest.raises(InvalidOrderError) as exc_info:
-            simulator.buy(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
-        
+
         # 测试 PLAYING 状态
         simulator.playback_engine.state = PlaybackState.PLAYING
         with pytest.raises(InvalidOrderError) as exc_info:
             simulator.buy(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
-        
-        # 测试 DAY_ENDED 状态
-        simulator.playback_engine.state = PlaybackState.DAY_ENDED
-        with pytest.raises(InvalidOrderError) as exc_info:
-            simulator.buy(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
-        
+        assert "播放中无法交易" in str(exc_info.value)
+
         # 测试 FINISHED 状态
         simulator.playback_engine.state = PlaybackState.FINISHED
         with pytest.raises(InvalidOrderError) as exc_info:
             simulator.buy(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
-    
+        assert "无法交易" in str(exc_info.value)
+
     @settings(max_examples=100)
     @given(
         initial_cash=cash_amounts,
@@ -180,40 +169,72 @@ class TestTradingStateRestriction:
         quantity=quantities,
         code=stock_codes
     )
-    def test_sell_raises_error_when_not_paused(
+    def test_sell_raises_error_when_not_tradable(
         self, initial_cash: float, price: float, quantity: int, code: str
     ):
         """
-        验证非暂停状态下卖出抛出错误。
-        
+        验证播放中和播放结束状态下卖出抛出错误。
+
         *For any* 交易操作（卖出）：
-        如果播放状态不是 PAUSED，应抛出错误
+        如果播放状态是 PLAYING 或 FINISHED，应抛出错误
         """
         data_engine = MockDataEngine()
         simulator = Simulator(data_engine, initial_cash=initial_cash)
-        
+
         start_date = date(2024, 1, 2)
         end_date = date(2024, 1, 31)
         simulator.setup([code], start_date, end_date)
         simulator.start_day()
-        
-        # 测试 IDLE 状态
-        simulator.playback_engine.state = PlaybackState.IDLE
-        with pytest.raises(InvalidOrderError) as exc_info:
-            simulator.sell(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
-        
+
         # 测试 PLAYING 状态
         simulator.playback_engine.state = PlaybackState.PLAYING
         with pytest.raises(InvalidOrderError) as exc_info:
             simulator.sell(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
-        
-        # 测试 DAY_ENDED 状态
-        simulator.playback_engine.state = PlaybackState.DAY_ENDED
+        assert "播放中无法交易" in str(exc_info.value)
+
+        # 测试 FINISHED 状态
+        simulator.playback_engine.state = PlaybackState.FINISHED
         with pytest.raises(InvalidOrderError) as exc_info:
             simulator.sell(code, price, quantity)
-        assert "只能在暂停状态下进行交易" in str(exc_info.value)
+        assert "无法交易" in str(exc_info.value)
+
+    @settings(max_examples=100)
+    @given(
+        initial_cash=st.floats(min_value=100000.0, max_value=10000000.0, allow_nan=False, allow_infinity=False),
+        price=st.floats(min_value=10.0, max_value=200.0, allow_nan=False, allow_infinity=False),
+        quantity=st.integers(min_value=100, max_value=1000).map(lambda x: (x // 100) * 100),
+        code=stock_codes
+    )
+    def test_buy_works_in_day_ended_state(
+        self, initial_cash: float, price: float, quantity: int, code: str
+    ):
+        """
+        验证收盘（DAY_ENDED）状态下可以挂单买入。
+
+        *For any* 交易操作（买入）：
+        如果播放状态是 DAY_ENDED，应正常处理订单（对应收盘后挂单）
+        """
+        initial_cash = round(initial_cash, 2)
+        price = round(price, 2)
+
+        data_engine = MockDataEngine()
+        simulator = Simulator(data_engine, initial_cash=initial_cash)
+
+        start_date = date(2024, 1, 2)
+        end_date = date(2024, 1, 31)
+        simulator.setup([code], start_date, end_date)
+        simulator.start_day()
+
+        simulator.playback_engine.state = PlaybackState.DAY_ENDED
+
+        amount = price * quantity
+        fee = simulator.account.calculate_buy_fee(amount)
+        assume(simulator.account.cash >= amount + fee)
+
+        order = simulator.buy(code, price, quantity)
+
+        assert order is not None
+        assert order.status in [OrderStatus.FILLED, OrderStatus.PENDING, OrderStatus.REJECTED]
     
     @settings(max_examples=100)
     @given(
@@ -252,10 +273,10 @@ class TestTradingStateRestriction:
         
         # 买入应该正常工作（不抛出 InvalidOrderError）
         order = simulator.buy(code, price, quantity)
-        
-        # 订单应该被处理（可能成功或因价格范围被拒绝，但不应抛出状态错误）
+
+        # 订单应该被处理（可能成交、挂单或被拒绝，但不应抛出状态错误）
         assert order is not None
-        assert order.status in [OrderStatus.FILLED, OrderStatus.REJECTED]
+        assert order.status in [OrderStatus.FILLED, OrderStatus.PENDING, OrderStatus.REJECTED]
     
     @settings(max_examples=100)
     @given(
@@ -290,10 +311,10 @@ class TestTradingStateRestriction:
         # 卖出应该正常工作（不抛出 InvalidOrderError 关于状态的错误）
         # 可能因为没有持仓而被拒绝，但不应抛出状态错误
         order = simulator.sell(code, price, quantity)
-        
+
         # 订单应该被处理
         assert order is not None
-        assert order.status in [OrderStatus.FILLED, OrderStatus.REJECTED]
+        assert order.status in [OrderStatus.FILLED, OrderStatus.PENDING, OrderStatus.REJECTED]
 
 
 
@@ -590,7 +611,7 @@ class TestMaxDrawdownCalculation:
         # 构建净值历史
         net_values = [initial_value * v for v in values]
         simulator.net_value_history = [
-            (date(2024, 1, i + 1), v) for i, v in enumerate(net_values)
+            (date(2024, 1, 1) + timedelta(days=i), v) for i, v in enumerate(net_values)
         ]
         
         # 手动计算期望的最大回撤

@@ -184,46 +184,63 @@ class Simulator:
         """暂停播放。"""
         self.playback_engine.pause()
     
+    def _ensure_tradable_state(self) -> None:
+        """
+        校验当前播放状态是否允许交易。
+
+        允许：IDLE（未开始）、PAUSED（暂停）、DAY_ENDED（收盘后挂单）
+        禁止：PLAYING（播放中）、FINISHED（行情播放完毕）
+        """
+        state = self.playback_engine.state
+        if state == PlaybackState.PLAYING:
+            raise InvalidOrderError("播放中无法交易，请先暂停")
+        if state == PlaybackState.FINISHED:
+            raise InvalidOrderError("行情已播放完毕，无法交易")
+
     def buy(self, code: str, price: float, quantity: int) -> Order:
         """
-        买入股票（挂单模式，可随时下单）。
-        
+        买入股票（挂单模式，IDLE/暂停/收盘后可下单）。
+
         Args:
             code: 股票代码
             price: 委托价格
             quantity: 委托数量
-            
+
         Returns:
             Order: 订单对象
         """
         if self.current_date is None:
             raise InvalidOrderError("模拟器未初始化")
-        
+
+        self._ensure_tradable_state()
+
         # 获取当前价格
         current_price = self.playback_engine.get_current_price(code)
-        
+
         return self.trading_engine.submit_buy_order(
             code, price, quantity, self.current_date, current_price
         )
-    
+
     def sell(self, code: str, price: float, quantity: int) -> Order:
         """
-        卖出股票（挂单模式，可随时下单）。
-        
+        卖出股票（挂单模式，IDLE/暂停/收盘后可下单）。
+
         Args:
             code: 股票代码
             price: 委托价格
             quantity: 委托数量
-            
+
         Returns:
             Order: 订单对象
         """
         if self.current_date is None:
             raise InvalidOrderError("模拟器未初始化")
-        
+
+        self._ensure_tradable_state()
+
         # 获取当前价格
         current_price = self.playback_engine.get_current_price(code)
-        
+
         return self.trading_engine.submit_sell_order(
             code, price, quantity, self.current_date, current_price
         )
@@ -398,7 +415,8 @@ class Simulator:
                     price=price,
                     quantity=quantity,
                     current_date=self.current_date,
-                    current_price=daily_bar.close if daily_bar else None
+                    current_price=daily_bar.close if daily_bar else None,
+                    daily_bar=daily_bar
                 )
             elif order_type == "sell" or order_type == OrderType.SELL:
                 self.trading_engine.submit_sell_order(
@@ -406,7 +424,8 @@ class Simulator:
                     price=price,
                     quantity=quantity,
                     current_date=self.current_date,
-                    current_price=daily_bar.close if daily_bar else None
+                    current_price=daily_bar.close if daily_bar else None,
+                    daily_bar=daily_bar
                 )
 
     

@@ -57,28 +57,36 @@ class TradingEngine:
         price: float,
         quantity: int,
         current_date: date,
-        current_price: Optional[float] = None
+        current_price: Optional[float] = None,
+        daily_bar: Optional[DailyBar] = None
     ) -> Order:
         """
-        提交买入订单（挂单模式）。
-        
+        提交买入订单。
+
+        成交规则：
+        - 提供 current_price（实时/回放模式）：委托价 >= 当前价时立即以当前价成交，
+          否则进入挂单列表等待价格触及
+        - 未提供 current_price（回测/直接成交模式）：立即以委托价成交
+        - 提供 daily_bar 时，委托价必须在当日 [low, high] 范围内（回测价格范围验证）
+
         Args:
             code: 股票代码
             price: 委托价格
             quantity: 委托数量
             current_date: 当前日期
             current_price: 当前市场价格（用于判断是否立即成交）
-            
+            daily_bar: 当日行情（用于回测模式的价格范围验证）
+
         Returns:
             Order: 订单对象
         """
         # 验证数量
         if quantity <= 0 or not isinstance(quantity, int):
             raise InvalidOrderError("委托数量必须为正整数")
-        
+
         if price <= 0:
             raise InvalidOrderError("委托价格必须为正数")
-        
+
         order = Order(
             code=code,
             order_type=OrderType.BUY,
@@ -86,31 +94,42 @@ class TradingEngine:
             quantity=quantity,
             order_date=current_date
         )
-        
+
+        # 回测模式价格范围验证
+        if daily_bar is not None and not (daily_bar.low <= price <= daily_bar.high):
+            order.status = OrderStatus.REJECTED
+            order.reject_reason = "委托价格超出当日价格范围"
+            self.trade_log.append(order)
+            return order
+
         # 计算所需资金
         amount = price * quantity
         fee = self.account.calculate_buy_fee(amount)
         total_cost = amount + fee
-        
+
         # 验证可用资金是否充足
         if self.available_cash < total_cost:
             order.status = OrderStatus.REJECTED
             order.reject_reason = "可用资金不足"
             self.trade_log.append(order)
             return order
-        
+
         # 冻结资金
         order.fee = fee
         order.frozen_cash = total_cost
-        
-        # 检查是否可以立即成交（委托价 >= 当前价）
-        if current_price is not None and price >= current_price:
+
+        if current_price is None:
+            # 回测/直接成交模式：立即以委托价成交
+            self._execute_buy(order, price)
+            self.trade_log.append(order)
+        elif price >= current_price:
+            # 委托价 >= 当前价，立即以当前价成交
             self._execute_buy(order, current_price)
             self.trade_log.append(order)
         else:
             # 加入挂单列表
             self.pending_orders.append(order)
-        
+
         return order
 
     def submit_sell_order(
@@ -119,28 +138,36 @@ class TradingEngine:
         price: float,
         quantity: int,
         current_date: date,
-        current_price: Optional[float] = None
+        current_price: Optional[float] = None,
+        daily_bar: Optional[DailyBar] = None
     ) -> Order:
         """
-        提交卖出订单（挂单模式）。
-        
+        提交卖出订单。
+
+        成交规则：
+        - 提供 current_price（实时/回放模式）：委托价 <= 当前价时立即以当前价成交，
+          否则进入挂单列表等待价格触及
+        - 未提供 current_price（回测/直接成交模式）：立即以委托价成交
+        - 提供 daily_bar 时，委托价必须在当日 [low, high] 范围内（回测价格范围验证）
+
         Args:
             code: 股票代码
             price: 委托价格
             quantity: 委托数量
             current_date: 当前日期
             current_price: 当前市场价格（用于判断是否立即成交）
-            
+            daily_bar: 当日行情（用于回测模式的价格范围验证）
+
         Returns:
             Order: 订单对象
         """
         # 验证数量
         if quantity <= 0 or not isinstance(quantity, int):
             raise InvalidOrderError("委托数量必须为正整数")
-        
+
         if price <= 0:
             raise InvalidOrderError("委托价格必须为正数")
-        
+
         order = Order(
             code=code,
             order_type=OrderType.SELL,
@@ -148,36 +175,51 @@ class TradingEngine:
             quantity=quantity,
             order_date=current_date
         )
-        
+
+        # 回测模式价格范围验证
+        if daily_bar is not None and not (daily_bar.low <= price <= daily_bar.high):
+            order.status = OrderStatus.REJECTED
+            order.reject_reason = "委托价格超出当日价格范围"
+            self.trade_log.append(order)
+            return order
+
         # 验证持仓是否存在
         if code not in self.account.positions:
             order.status = OrderStatus.REJECTED
             order.reject_reason = "无持仓"
             self.trade_log.append(order)
             return order
-        
+
         # 验证可卖数量是否充足
         available = self.get_available_quantity(code, current_date)
         if available < quantity:
+            position = self.account.positions[code]
             order.status = OrderStatus.REJECTED
-            order.reject_reason = f"可卖数量不足（可卖: {available}）"
+            if available == 0 and position.buy_date >= current_date:
+                order.reject_reason = "T+1限制，当天买入不可卖出"
+            else:
+                order.reject_reason = f"可卖数量不足（可卖: {available}）"
             self.trade_log.append(order)
             return order
-        
+
         # 计算手续费
         amount = price * quantity
         fee = self.account.calculate_sell_fee(amount)
         order.fee = fee
         order.frozen_quantity = quantity
-        
-        # 检查是否可以立即成交（委托价 <= 当前价）
-        if current_price is not None and price <= current_price:
+
+        if current_price is None:
+            # 回测/直接成交模式：立即以委托价成交
+            self._execute_sell(order, price)
+            self.trade_log.append(order)
+        elif price <= current_price:
+            # 委托价 <= 当前价，立即以当前价成交
             self._execute_sell(order, current_price)
             self.trade_log.append(order)
         else:
             # 加入挂单列表
             self.pending_orders.append(order)
-        
+
         return order
     
     def cancel_order(self, order_id: str) -> bool:
