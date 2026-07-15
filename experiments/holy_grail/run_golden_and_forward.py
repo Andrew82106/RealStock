@@ -11,9 +11,11 @@
                      → 如果有人看到"战绩"后才开始抄作业
 
 用法:
-    python experiments/holy_grail/run_golden_and_forward.py <code> <buy_pct> <sell_pct> <window_start> <window_end>
+    python experiments/holy_grail/run_golden_and_forward.py <code> <buy_pct> <sell_pct> <window_start> <window_end> [strategy]
+    strategy: chase(默认) 或 lri（韭菜共振指数，忽略 buy_pct/sell_pct 参数）
 例:
     python experiments/holy_grail/run_golden_and_forward.py 002432 3 5 2021-11-09 2021-12-08
+    python experiments/holy_grail/run_golden_and_forward.py 002583 0 0 2024-09-25 2024-10-31 lri
 """
 
 import json
@@ -30,6 +32,7 @@ import pandas as pd
 
 from src.simulator.simulator import Simulator
 from experiments.holy_grail.chase_strategy import ChaseStrategy
+from experiments.holy_grail.grail_indicator import GrailIndicatorStrategy
 from experiments.holy_grail.data_loader import RatioAdjustedDataEngine
 
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei"]
@@ -49,14 +52,13 @@ def run_once(
     code: str,
     start: date,
     end: date,
-    buy_pct: float,
-    sell_pct: float,
+    strategy_factory,
     tag: str,
 ) -> dict:
     """跑一轮真实回测，导出净值和交易日志，返回摘要。"""
     sim = Simulator(engine, initial_cash=INITIAL_CASH)
     sim.setup(stock_codes=[code], start_date=start, end_date=end)
-    strategy = ChaseStrategy(buy_pct=buy_pct, sell_pct=sell_pct)
+    strategy = strategy_factory()
     metrics = sim.run_backtest(strategy)
 
     # 净值曲线（run_backtest 每天记录一次，首尾可能重复，去重保留最后值）
@@ -104,7 +106,7 @@ def plot_curve(nv: pd.DataFrame, title: str, out_png: Path, lock_date: date = No
 
 
 def main():
-    if len(sys.argv) != 6:
+    if len(sys.argv) not in (6, 7):
         print(__doc__)
         sys.exit(1)
 
@@ -113,20 +115,30 @@ def main():
     sell_pct = float(sys.argv[3])
     window_start = date.fromisoformat(sys.argv[4])
     window_end = date.fromisoformat(sys.argv[5])
+    strategy_name = sys.argv[6] if len(sys.argv) == 7 else "chase"
 
     RESULTS_DIR.mkdir(exist_ok=True)
     engine = RatioAdjustedDataEngine(cache_dir=str(CACHE_DIR))
 
-    # 找区间前一个交易日（策略需要前收才能产生首日信号）
     df = engine.get_daily_data(code, DATA_START, DATA_END)
     dates = df["date"].tolist()
     ws_idx = next(i for i, d in enumerate(dates) if d >= window_start)
-    warmup_start = dates[max(ws_idx - 1, 0)]
     we_idx = next(i for i, d in enumerate(dates) if d >= window_end)
-    forward_start = dates[min(we_idx + 1, len(dates) - 1)]
 
-    prefix = f"{code}_bt{buy_pct:g}_st{sell_pct:g}"
-    print(f"股票 {code} | 买入阈值 +{buy_pct}% | 卖出阈值 -{sell_pct}%")
+    if strategy_name == "lri":
+        # LRI 需要预热：窗口前留 10 个交易日算指标，预热期不交易
+        warmup = 10
+        warmup_start = dates[max(ws_idx - warmup - 1, 0)]
+        forward_start = dates[max(we_idx - warmup + 1, 0)]
+        strategy_factory = lambda: GrailIndicatorStrategy(warmup_days=warmup)
+        prefix = f"{code}_lri"
+        print(f"股票 {code} | 韭菜共振指数 LRI（≥88买入 / ≤44清仓，预热{warmup}日）")
+    else:
+        warmup_start = dates[max(ws_idx - 1, 0)]
+        forward_start = dates[min(we_idx + 1, len(dates) - 1)]
+        strategy_factory = lambda: ChaseStrategy(buy_pct=buy_pct, sell_pct=sell_pct)
+        prefix = f"{code}_bt{buy_pct:g}_st{sell_pct:g}"
+        print(f"股票 {code} | 买入阈值 +{buy_pct}% | 卖出阈值 -{sell_pct}%")
     print(f"高光区间 {window_start} ~ {window_end} | 数据截止 {DATA_END}\n")
 
     runs = [
@@ -135,16 +147,19 @@ def main():
         ("forward", forward_start, DATA_END, "Run3 锁参后入场（看到战绩才抄作业）"),
     ]
 
+    strategy_desc = ("韭菜共振指数LRI(88/44)" if strategy_name == "lri"
+                     else f"追涨+{buy_pct:g}%/杀跌-{sell_pct:g}%")
+
     all_summaries = {}
     for tag, start, end, label in runs:
         full_tag = f"{prefix}_{tag}"
-        result = run_once(engine, code, start, end, buy_pct, sell_pct, full_tag)
+        result = run_once(engine, code, start, end, strategy_factory, full_tag)
         s = result["summary"]
         all_summaries[tag] = s
 
         lock = window_end if tag == "full_arc" else None
         plot_curve(result["net_value"],
-                   f"{label}  {code}  追涨+{buy_pct:g}%/杀跌-{sell_pct:g}%",
+                   f"{label}  {code}  {strategy_desc}",
                    RESULTS_DIR / f"{full_tag}.png", lock_date=lock)
 
         print(f"[{label}]")

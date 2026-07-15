@@ -1120,7 +1120,11 @@ export default function TradingView() {
 
   const currentPrice = currentPrices[selectedStock] || dailyData[selectedStock]?.slice(-1)[0]?.close || 0;
   const selectedPosition = account?.positions.find(p => p.code === selectedStock);
-  const canTrade = sessionId && (gameState?.playbackState === 'idle' || gameState?.playbackState === 'paused');
+  const canTrade = sessionId && (
+    gameState?.playbackState === 'idle' ||
+    gameState?.playbackState === 'paused' ||
+    gameState?.playbackState === 'day_ended'
+  );
   const hasStocks = stockCodes.length > 0;
 
   // 空股票列表状态
@@ -1254,10 +1258,10 @@ export default function TradingView() {
               </Button>
             </Badge>
           </Tooltip>
-          <Tooltip title={canTrade ? '点击交易' : '请先暂停播放'}>
-            <Button 
+          <Tooltip title={canTrade ? '点击交易' : '播放中无法交易，请先暂停'}>
+            <Button
               type={showTrading ? 'primary' : 'default'}
-              icon={<SwapOutlined />} 
+              icon={<SwapOutlined />}
               onClick={() => setShowTrading(!showTrading)}
               disabled={!canTrade}
             >

@@ -72,7 +72,59 @@ function calculateMACD(closes: number[], fast = 12, slow = 26, signal = 9) {
   return { dif, dea, macd };
 }
 
-export default function StockChart({ 
+// 计算韭菜共振指数 LRI (Leek Resonance Index)
+// 与后端 experiments/holy_grail/grail_indicator.py 完全一致：
+//   动量共振核 M = 0.7·EMA3(日收益%) + 0.3·EMA8(日收益%)
+//   量能激励项 V = ln(1 + Vol / MA5(Vol))
+//   玄学修正   Θ = 1 + 0.08·sin(2π·交易日序号/8)
+//   LRI = 100·sigmoid( M·(1 + 0.5·V)·Θ )，≥88 买入，≤44 清仓
+function calculateLRI(bars: Array<{ close: number; volume: number }>): (number | null)[] {
+  const EMA_FAST = 3, EMA_SLOW = 8, VOL_MA = 5;
+  const FAITH_K = 1.0, FOLLOW_BETA = 0.5, MYSTIC_PERIOD = 8, MYSTIC_AMP = 0.08;
+
+  let emaFast: number | null = null;
+  let emaSlow: number | null = null;
+  let prevClose: number | null = null;
+  const volWindow: number[] = [];
+  const result: (number | null)[] = [];
+  let dayIndex = 0;
+
+  for (const bar of bars) {
+    dayIndex++;
+    if (prevClose === null || prevClose <= 0) {
+      prevClose = bar.close;
+      volWindow.push(bar.volume);
+      result.push(null);
+      continue;
+    }
+
+    const retPct = (bar.close - prevClose) / prevClose * 100;
+    prevClose = bar.close;
+
+    const aF = 2 / (EMA_FAST + 1);
+    const aS = 2 / (EMA_SLOW + 1);
+    emaFast = emaFast === null ? retPct : aF * retPct + (1 - aF) * emaFast;
+    emaSlow = emaSlow === null ? retPct : aS * retPct + (1 - aS) * emaSlow;
+    const momentum = 0.7 * emaFast + 0.3 * emaSlow;
+
+    const win = volWindow.slice(-VOL_MA);
+    const volMa = win.length ? win.reduce((a, b) => a + b, 0) / win.length : 0;
+    const volTerm = volMa > 0 ? Math.log(1 + bar.volume / volMa) : 0;
+    volWindow.push(bar.volume);
+
+    const mystic = 1 + MYSTIC_AMP * Math.sin(2 * Math.PI * dayIndex / MYSTIC_PERIOD);
+
+    const x = FAITH_K * momentum * (1 + FOLLOW_BETA * volTerm) * mystic;
+    const sig = x > 50 ? 1 : x < -50 ? 0 : 1 / (1 + Math.exp(-x));
+    result.push(100 * sig);
+  }
+  return result;
+}
+
+export const LRI_BUY_LEVEL = 88;
+export const LRI_SELL_LEVEL = 44;
+
+export default function StockChart({
   code, 
   dailyData, 
   stockCodes,
@@ -127,8 +179,8 @@ export default function StockChart({
 
   // 构建图表数据和技术指标
   const chartData = useMemo(() => {
-    if (!dailyData.length) return { dates: [], ohlc: [], volumes: [], closes: [], ma5: [], ma10: [], ma20: [], ma50: [], ma100: [], ma120: [], macdData: { dif: [], dea: [], macd: [] } };
-    
+    if (!dailyData.length) return { dates: [], ohlc: [], volumes: [], closes: [], ma5: [], ma10: [], ma20: [], ma50: [], ma100: [], ma120: [], macdData: { dif: [], dea: [], macd: [] }, lri: [] as (number | null)[] };
+
     const dates = dailyData.map((d) => d.date);
     const closes: number[] = [];
     const ohlc = dailyData.map((d, i) => {
@@ -143,7 +195,7 @@ export default function StockChart({
       const bar = i === dailyData.length - 1 && lastBarData ? lastBarData : d;
       return { value: bar.volume, itemStyle: { color: bar.close >= bar.open ? 'rgba(248,81,73,0.5)' : 'rgba(63,185,80,0.5)' } };
     });
-    
+
     // 计算均线
     const ma5 = calculateMA(closes, 5);
     const ma10 = calculateMA(closes, 10);
@@ -151,11 +203,14 @@ export default function StockChart({
     const ma50 = calculateMA(closes, 50);
     const ma100 = calculateMA(closes, 100);
     const ma120 = calculateMA(closes, 120);
-    
+
     // 计算 MACD
     const macdData = calculateMACD(closes);
-    
-    return { dates, ohlc, volumes, closes, ma5, ma10, ma20, ma50, ma100, ma120, macdData };
+
+    // 计算韭菜共振指数 LRI
+    const lri = calculateLRI(closes.map((c, i) => ({ close: c, volume: dailyData[i].volume })));
+
+    return { dates, ohlc, volumes, closes, ma5, ma10, ma20, ma50, ma100, ma120, macdData, lri };
   }, [dailyData, lastBarData]);
 
   // 处理交易记录
@@ -190,7 +245,7 @@ export default function StockChart({
       return { title: { text: '暂无数据', left: 'center', top: 'center', textStyle: { color: colors.textSecondary } }, backgroundColor: 'transparent' };
     }
 
-    const { dates, ohlc, volumes, ma5, ma10, ma20, ma50, ma100, ma120, macdData } = chartData;
+    const { dates, ohlc, volumes, ma5, ma10, ma20, ma50, ma100, ma120, macdData, lri } = chartData;
 
     const series: Array<Record<string, unknown>> = [
       { name: 'K线', type: 'candlestick', data: ohlc, xAxisIndex: 0, yAxisIndex: 0, itemStyle: { color: '#f85149', color0: '#3fb950', borderColor: '#f85149', borderColor0: '#3fb950' } },
@@ -203,9 +258,24 @@ export default function StockChart({
       { name: '成交量', type: 'bar', data: volumes, xAxisIndex: 1, yAxisIndex: 1 },
       { name: 'DIF', type: 'line', data: macdData.dif, xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#f5c242', width: 1 } },
       { name: 'DEA', type: 'line', data: macdData.dea, xAxisIndex: 2, yAxisIndex: 2, symbol: 'none', lineStyle: { color: '#42a5f5', width: 1 } },
-      { 
-        name: 'MACD', type: 'bar', data: macdData.macd.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#f85149' : '#3fb950' } })), 
-        xAxisIndex: 2, yAxisIndex: 2 
+      {
+        name: 'MACD', type: 'bar', data: macdData.macd.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#f85149' : '#3fb950' } })),
+        xAxisIndex: 2, yAxisIndex: 2
+      },
+      {
+        name: 'LRI', type: 'line', data: lri, xAxisIndex: 3, yAxisIndex: 3,
+        symbol: 'none', smooth: true,
+        lineStyle: { color: '#e879f9', width: 1.6 },
+        areaStyle: { color: 'rgba(232,121,249,0.08)' },
+        markLine: {
+          silent: true, symbol: 'none',
+          label: { position: 'insideEndTop', fontSize: 9 },
+          data: [
+            { yAxis: LRI_BUY_LEVEL, lineStyle: { color: '#f85149', type: 'dashed', width: 1 }, label: { formatter: '买入 88', color: '#f85149' } },
+            { yAxis: LRI_SELL_LEVEL, lineStyle: { color: '#3fb950', type: 'dashed', width: 1 }, label: { formatter: '清仓 44', color: '#3fb950' } },
+          ],
+        },
+        z: 10,
       },
     ];
 
@@ -281,6 +351,13 @@ export default function StockChart({
             if (macd) html += `<span style="color:${(macd.value as number) >= 0 ? '#f85149' : '#3fb950'}">MACD: ${(macd.value as number).toFixed(3)}</span>`;
             html += `</div>`;
           }
+          // LRI 值
+          const lriItem = p.find(item => item.seriesName === 'LRI');
+          if (lriItem && lriItem.value !== null && lriItem.value !== undefined) {
+            const lv = lriItem.value as number;
+            const state = lv >= 88 ? '（共振！买入区）' : lv <= 44 ? '（失联，清仓区）' : '';
+            html += `<div style="margin-top:4px;font-size:11px"><span style="color:#e879f9">LRI: ${lv.toFixed(1)}${state}</span></div>`;
+          }
           const trades = tradesByDate.get(date);
           if (trades && trades.length > 0) {
             html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid ${colors.border}">`;
@@ -295,23 +372,33 @@ export default function StockChart({
       },
 
       grid: [
-        { left: '10%', right: '3%', top: '10%', height: '42%' },  // K线
-        { left: '10%', right: '3%', top: '56%', height: '12%' },  // 成交量
-        { left: '10%', right: '3%', top: '72%', height: '14%' },  // MACD
+        { left: '10%', right: '3%', top: '10%', height: '36%' },  // K线
+        { left: '10%', right: '3%', top: '50%', height: '10%' },  // 成交量
+        { left: '10%', right: '3%', top: '63%', height: '10%' },  // MACD
+        { left: '10%', right: '3%', top: '76%', height: '13%' },  // LRI 韭菜共振指数
       ],
       xAxis: [
         { type: 'category', data: dates, gridIndex: 0, axisLine: { lineStyle: { color: colors.border } }, axisLabel: { show: false }, axisTick: { show: false } },
         { type: 'category', data: dates, gridIndex: 1, axisLine: { lineStyle: { color: colors.border } }, axisLabel: { show: false }, axisTick: { show: false } },
-        { type: 'category', data: dates, gridIndex: 2, axisLine: { lineStyle: { color: colors.border } }, axisLabel: { color: colors.textSecondary, fontSize: 10 }, axisTick: { show: false } },
+        { type: 'category', data: dates, gridIndex: 2, axisLine: { lineStyle: { color: colors.border } }, axisLabel: { show: false }, axisTick: { show: false } },
+        { type: 'category', data: dates, gridIndex: 3, axisLine: { lineStyle: { color: colors.border } }, axisLabel: { color: colors.textSecondary, fontSize: 10 }, axisTick: { show: false } },
       ],
       yAxis: [
         { scale: true, gridIndex: 0, splitLine: { lineStyle: { color: colors.gridLine } }, axisLabel: { color: colors.textSecondary, fontSize: 10 } },
         { scale: true, gridIndex: 1, splitLine: { show: false }, axisLabel: { color: colors.textSecondary, fontSize: 10, formatter: (v: number) => v >= 10000 ? `${(v/10000).toFixed(0)}万` : v } },
         { scale: true, gridIndex: 2, splitLine: { lineStyle: { color: colors.gridLine, type: 'dashed' } }, axisLabel: { color: colors.textSecondary, fontSize: 10 } },
+        { min: 0, max: 100, gridIndex: 3, splitNumber: 2, splitLine: { lineStyle: { color: colors.gridLine, type: 'dashed' } }, axisLabel: { color: colors.textSecondary, fontSize: 10 } },
       ],
       dataZoom: [
-        { type: 'inside', xAxisIndex: [0, 1, 2], start: 60, end: 100 },
-        { show: true, xAxisIndex: [0, 1, 2], type: 'slider', bottom: '1%', start: 60, end: 100, height: 18, borderColor: colors.border, fillerColor: 'rgba(88,166,255,0.2)', backgroundColor: colors.sliderBg, textStyle: { color: colors.textSecondary, fontSize: 10 } },
+        { type: 'inside', xAxisIndex: [0, 1, 2, 3], start: 60, end: 100 },
+        { show: true, xAxisIndex: [0, 1, 2, 3], type: 'slider', bottom: '1%', start: 60, end: 100, height: 18, borderColor: colors.border, fillerColor: 'rgba(88,166,255,0.2)', backgroundColor: colors.sliderBg, textStyle: { color: colors.textSecondary, fontSize: 10 } },
+      ],
+      graphic: [
+        {
+          type: 'text', left: '10%', top: '73.5%',
+          style: { text: '韭菜共振指数 LRI（≥88 买入 / ≤44 清仓）', fontSize: 10, fill: '#e879f9', fontWeight: 600 },
+          silent: true,
+        },
       ],
       series,
     };

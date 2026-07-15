@@ -21,11 +21,12 @@ class DataEngine:
     def __init__(self, cache_dir: str = "./data_cache"):
         """
         初始化数据引擎，指定缓存目录。
-        
+
         Args:
             cache_dir: 缓存目录路径，默认为 ./data_cache
         """
         self.cache_dir = Path(cache_dir)
+        self._stock_list_cache: list[StockInfo] = []
         self._ensure_cache_dirs()
     
     def _ensure_cache_dirs(self) -> None:
@@ -72,39 +73,102 @@ class DataEngine:
     def get_stock_list(self) -> list[StockInfo]:
         """
         获取所有 A 股股票列表。
-        
+
+        优先级：内存缓存 → 当日磁盘缓存 → 东方财富接口 → 交易所官网接口。
+
         Returns:
             list[StockInfo]: 股票信息列表
-            
+
         Raises:
-            DataFetchError: 当 API 调用失败时
+            DataFetchError: 当所有数据源均失败时
         """
+        # 内存缓存（进程生命周期内有效）
+        if self._stock_list_cache:
+            return self._stock_list_cache
+
+        # 当日磁盘缓存
+        cached = self._load_stock_list_cache()
+        if cached:
+            self._stock_list_cache = cached
+            return cached
+
+        errors = []
+
+        # 数据源1：东方财富
         try:
             import akshare as ak
-            
-            # 获取 A 股股票列表
+
             df = ak.stock_zh_a_spot_em()
-            
-            stock_list = []
-            for _, row in df.iterrows():
-                code = str(row["代码"]).zfill(6)
-                name = row["名称"]
-                
-                # 根据代码判断市场
-                if code.startswith("6"):
-                    market = "sh"
-                elif code.startswith("0") or code.startswith("3"):
-                    market = "sz"
-                else:
-                    # 跳过其他类型的代码（如北交所）
-                    continue
-                
-                stock_list.append(StockInfo(code=code, name=name, market=market))
-            
-            return stock_list
-            
+            stock_list = self._build_stock_list(df, code_col="代码", name_col="名称")
+            if stock_list:
+                self._stock_list_cache = stock_list
+                self._save_stock_list_cache(stock_list)
+                return stock_list
         except Exception as e:
-            raise DataFetchError(f"获取股票列表失败: {str(e)}") from e
+            errors.append(f"东方财富: {str(e)}")
+
+        # 数据源2：交易所官网（上交所/深交所）
+        try:
+            import akshare as ak
+
+            df = ak.stock_info_a_code_name()
+            stock_list = self._build_stock_list(df, code_col="code", name_col="name")
+            if stock_list:
+                self._stock_list_cache = stock_list
+                self._save_stock_list_cache(stock_list)
+                return stock_list
+        except Exception as e:
+            errors.append(f"交易所官网: {str(e)}")
+
+        raise DataFetchError(f"获取股票列表失败: {'; '.join(errors)}")
+
+    @staticmethod
+    def _build_stock_list(df: pd.DataFrame, code_col: str, name_col: str) -> list[StockInfo]:
+        """从 DataFrame 构建股票列表，跳过北交所等无法识别的代码。"""
+        stock_list = []
+        for _, row in df.iterrows():
+            code = str(row[code_col]).zfill(6)
+            name = str(row[name_col])
+
+            if code.startswith("6"):
+                market = "sh"
+            elif code.startswith("0") or code.startswith("3"):
+                market = "sz"
+            else:
+                continue
+
+            stock_list.append(StockInfo(code=code, name=name, market=market))
+        return stock_list
+
+    def _stock_list_cache_path(self) -> Path:
+        return self.cache_dir / "stock_list.csv"
+
+    def _load_stock_list_cache(self) -> list[StockInfo]:
+        """加载当日有效的股票列表磁盘缓存。"""
+        import datetime as _dt
+
+        path = self._stock_list_cache_path()
+        if not path.exists():
+            return []
+        try:
+            mtime = _dt.date.fromtimestamp(path.stat().st_mtime)
+            if mtime != _dt.date.today():
+                return []
+            df = pd.read_csv(path, dtype={"code": str})
+            return [
+                StockInfo(code=str(r["code"]).zfill(6), name=str(r["name"]), market=str(r["market"]))
+                for _, r in df.iterrows()
+            ]
+        except Exception:
+            return []
+
+    def _save_stock_list_cache(self, stock_list: list[StockInfo]) -> None:
+        try:
+            pd.DataFrame(
+                [{"code": s.code, "name": s.name, "market": s.market} for s in stock_list]
+            ).to_csv(self._stock_list_cache_path(), index=False)
+        except Exception:
+            pass
     
     def get_daily_data(
         self,

@@ -1,0 +1,44 @@
+{
+  "golden": {
+    "tag": "300085_lri_golden",
+    "start": "2024-08-15",
+    "end": "2024-10-09",
+    "trading_days": 33,
+    "final_assets": 376382.39,
+    "total_return_pct": 276.38,
+    "max_drawdown_pct": 2.97,
+    "peak_assets": 376382.39,
+    "peak_date": "2024-10-09",
+    "win_rate_pct": 100.0,
+    "total_trades": 1,
+    "filled_orders": 3
+  },
+  "full_arc": {
+    "tag": "300085_lri_full_arc",
+    "start": "2024-08-15",
+    "end": "2026-07-14",
+    "trading_days": 461,
+    "final_assets": 182422.61,
+    "total_return_pct": 82.42,
+    "max_drawdown_pct": 53.06,
+    "peak_assets": 376382.39,
+    "peak_date": "2024-10-09",
+    "win_rate_pct": 39.39,
+    "total_trades": 33,
+    "filled_orders": 66
+  },
+  "forward": {
+    "tag": "300085_lri_forward",
+    "start": "2024-09-19",
+    "end": "2026-07-14",
+    "trading_days": 438,
+    "final_assets": 60986.68,
+    "total_return_pct": -39.01,
+    "max_drawdown_pct": 48.97,
+    "peak_assets": 115978.3,
+    "peak_date": "2024-10-31",
+    "win_rate_pct": 34.38,
+    "total_trades": 32,
+    "filled_orders": 64
+  }
+}
