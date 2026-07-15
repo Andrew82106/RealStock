@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react';
 import { Empty, Table, Tag, Row, Col, Tabs, Statistic, Card } from 'antd';
 import { ArrowUpOutlined, ArrowDownOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import EChartsWrapper from './EChartsWrapper';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DailySnapshot, SaveTradeRecord, Position } from '../types';
 
@@ -410,7 +410,7 @@ export default function AssetChart({
             {activeTab === 'chart' && (
               <Row gutter={16} style={{ height: '100%' }}>
                 <Col span={16}>
-                  <ReactECharts option={chartOption} style={{ height: 400 }} notMerge={false} lazyUpdate={true} />
+                  <EChartsWrapper option={chartOption} style={{ height: 400 }} notMerge={false} lazyUpdate={true} />
                 </Col>
                 <Col span={8}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

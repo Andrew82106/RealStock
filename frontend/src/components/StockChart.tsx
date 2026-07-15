@@ -1,9 +1,9 @@
 /**
  * K线图组件 - 支持技术指标（MA、MACD）和买卖标记
  */
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Select, Tag, Switch, Tooltip } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import EChartsWrapper from './EChartsWrapper';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DailyBar, StockInfo, SaveTradeRecord } from '../types';
 
@@ -136,7 +136,6 @@ export default function StockChart({
   intradayLow,
   tradeHistory = [],
 }: StockChartProps) {
-  const chartRef = useRef<ReactECharts>(null);
   const [showTrades, setShowTrades] = useState(true);
   const { theme } = useTheme();
   
@@ -424,7 +423,7 @@ export default function StockChart({
         )}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <ReactECharts ref={chartRef} option={option} style={{ height: '100%', minHeight: 350 }} notMerge={false} lazyUpdate={true} />
+        <EChartsWrapper option={option} style={{ height: '100%', minHeight: 350 }} notMerge={false} lazyUpdate={true} />
       </div>
     </div>
   );

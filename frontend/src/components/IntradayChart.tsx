@@ -1,9 +1,9 @@
 /**
  * 分时图组件 - 优化实时渲染性能
  */
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { Empty, Tag } from 'antd';
-import ReactECharts from 'echarts-for-react';
+import EChartsWrapper from './EChartsWrapper';
 import { useTheme } from '../contexts/ThemeContext';
 
 interface IntradayChartProps {
@@ -13,7 +13,6 @@ interface IntradayChartProps {
 }
 
 export default function IntradayChart({ code, priceHistory, openPrice }: IntradayChartProps) {
-  const chartRef = useRef<ReactECharts>(null);
   const { theme } = useTheme();
   
   // 主题颜色
@@ -162,8 +161,7 @@ export default function IntradayChart({ code, priceHistory, openPrice }: Intrada
 
   return (
     <div style={{ padding: 16, height: '100%' }}>
-      <ReactECharts
-        ref={chartRef}
+      <EChartsWrapper
         option={option || {}}
         style={{ height: 'calc(100% - 16px)', minHeight: 400 }}
         notMerge={false}

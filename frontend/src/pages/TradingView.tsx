@@ -94,8 +94,8 @@ export default function TradingView() {
   const [newAchievementCount, setNewAchievementCount] = useState(0);
   const [newlyUnlockedAchievements, setNewlyUnlockedAchievements] = useState<AchievementDefinition[]>([]);
   
-  // 挑战模式相关状态
-  const [challengeProgress, setChallengeProgress] = useState<ChallengeProgress | null>(null);
+  // 挑战模式相关状态（challengeProgress 仅由轮询更新，供后续 UI 使用）
+  const [, setChallengeProgress] = useState<ChallengeProgress | null>(null);
   const [challengeConfig, setChallengeConfig] = useState<ChallengeConfig | null>(null);
   const [isChallenge, setIsChallenge] = useState(false);
   const [challengeCompleted, setChallengeCompleted] = useState(false);
