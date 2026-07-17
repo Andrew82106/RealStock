@@ -44,6 +44,9 @@ export interface GameState {
   currentDate: string;
   playbackState: 'idle' | 'playing' | 'paused' | 'day_ended' | 'finished';
   isLastDay: boolean;
+  dateIndex: number;
+  totalDates: number;
+  mode: 'daily';
 }
 
 // 绩效指标
@@ -85,12 +88,98 @@ export interface GameStartRequest {
   start_date: string;
   end_date: string;
   initial_cash: number;
+  indicator_id?: string;
 }
 
 export interface GameStartResponse {
   session_id: string;
   current_date: string;
   trading_dates: string[];
+  mode: 'daily';
+}
+
+export interface LocalGameArchive {
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+  currentDate: string;
+  startDate: string;
+  endDate: string;
+  stockCodes: string[];
+  stockNames: Record<string, string | null>;
+  initialCash: number;
+  totalAssets: number;
+  indicatorId?: string;
+  dateIndex: number;
+  totalDates: number;
+  isLastDay: boolean;
+}
+
+export interface CacheRange {
+  start: string;
+  end: string;
+}
+
+export interface CacheStatus {
+  code: string;
+  name?: string;
+  adjust: string;
+  complete: boolean;
+  ranges: CacheRange[];
+  missing_ranges: CacheRange[];
+  row_count: number;
+  data_start?: string;
+  data_end?: string;
+  file_size: number;
+  updated_at?: string;
+}
+
+export interface CacheRequest {
+  stock_codes: string[];
+  start_date: string;
+  end_date: string;
+  adjust?: string;
+}
+
+export interface CachePreflight {
+  ready: boolean;
+  items: CacheStatus[];
+}
+
+export type IndicatorMetric = 'momentum' | 'ma_gap' | 'volume_ratio' | 'volatility' | 'rsi';
+
+export interface IndicatorComponentDefinition {
+  metric: IndicatorMetric;
+  window: number;
+  weight: number;
+}
+
+export interface IndicatorDefinition {
+  schema?: 'realstock-indicator/v1' | 'realstock-indicator/v2';
+  id?: string;
+  name: string;
+  description: string;
+  version: number;
+  language?: 'python' | 'builder';
+  code?: string;
+  components: IndicatorComponentDefinition[];
+  buy_threshold: number;
+  sell_threshold: number;
+  builtin?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface IndicatorValue {
+  date: string;
+  value: number | null;
+  signal: 'buy' | 'sell' | 'hold' | 'warming_up';
+  components: Record<string, number | null>;
+}
+
+export interface IndicatorPreview {
+  definition: IndicatorDefinition | null;
+  values: IndicatorValue[];
 }
 
 export interface OrderRequest {

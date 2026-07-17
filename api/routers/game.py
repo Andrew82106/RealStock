@@ -1,12 +1,16 @@
 """
 游戏控制 API 路由
 """
+import asyncio
+import hashlib
+import json
 from datetime import date, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from api.services.session import session_manager
+from api.services.session import GAME_LOOKBACK_DAYS, session_manager
 from api.services.save_service import SaveService, SaveNotFoundError
+from api.services.indicator_service import IndicatorError, IndicatorService
 from src.playback.models import PlaybackState
 from src.trading.models import OrderStatus
 from src.account.models import Position
@@ -15,6 +19,46 @@ router = APIRouter(prefix="/api/game", tags=["game"])
 
 # 全局存档服务实例
 _save_service: SaveService | None = None
+_indicator_service = IndicatorService()
+
+
+def _indicator_signature(definition: dict) -> str:
+    payload = json.dumps(definition, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _build_session_indicator_cache(session, definition: dict, signature: str) -> None:
+    """一次计算本局全部股票与日期；运行时只做日期切片。"""
+    with session.indicator_cache_lock:
+        if (
+            session.indicator_cache_signature == signature
+            and all(code in session.indicator_values_by_code for code in session.stock_codes)
+        ):
+            return
+        values_by_code = {}
+        for code in session.stock_codes:
+            frame = session.simulator.daily_data.get(code)
+            values_by_code[code] = (
+                _indicator_service.compute(definition, frame)
+                if frame is not None and not frame.empty else []
+            )
+        session.indicator_values_by_code = values_by_code
+        session.indicator_cache_signature = signature
+
+
+async def _ensure_session_indicator_cache(session) -> dict | None:
+    if not session.indicator_id:
+        return None
+    definition = _indicator_service.get(session.indicator_id)
+    signature = _indicator_signature(definition)
+    if (
+        session.indicator_cache_signature != signature
+        or any(code not in session.indicator_values_by_code for code in session.stock_codes)
+    ):
+        await asyncio.to_thread(
+            _build_session_indicator_cache, session, definition, signature
+        )
+    return definition
 
 
 def get_save_service() -> SaveService:
@@ -31,6 +75,7 @@ class GameStartRequest(BaseModel):
     start_date: str
     end_date: str
     initial_cash: float = 100000.0
+    indicator_id: str | None = None
 
 
 class GameStartResponse(BaseModel):
@@ -38,6 +83,7 @@ class GameStartResponse(BaseModel):
     session_id: str
     current_date: str
     trading_dates: list[str]
+    mode: str = "daily"
 
 
 class OrderRequest(BaseModel):
@@ -92,6 +138,27 @@ class GameStateResponse(BaseModel):
     current_date: str
     playback_state: str
     is_last_day: bool
+    date_index: int
+    total_dates: int
+    mode: str = "daily"
+
+
+class LocalSessionSummaryResponse(BaseModel):
+    """本地自动存档摘要。"""
+    session_id: str
+    created_at: str
+    updated_at: str
+    current_date: str
+    start_date: str
+    end_date: str
+    stock_codes: list[str]
+    stock_names: dict[str, str | None]
+    initial_cash: float
+    total_assets: float
+    indicator_id: str | None = None
+    date_index: int
+    total_dates: int
+    is_last_day: bool
 
 
 @router.post("/start", response_model=GameStartResponse)
@@ -100,22 +167,62 @@ async def start_game(request: GameStartRequest):
     try:
         start = date.fromisoformat(request.start_date)
         end = date.fromisoformat(request.end_date)
+        if not request.stock_codes:
+            raise ValueError("请至少选择一只股票")
+        if start >= end:
+            raise ValueError("结束日期必须晚于开始日期")
+        if request.initial_cash <= 0:
+            raise ValueError("初始资金必须大于 0")
+
+        engine = session_manager.get_data_engine()
+        cache_start = start - timedelta(days=GAME_LOOKBACK_DAYS)
+        cache_items = [
+            engine.get_cache_status(code, cache_start, end)
+            for code in request.stock_codes
+        ]
+        if not all(item["complete"] for item in cache_items):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "游戏区间及开始日前 31 天的 K 线尚未完整缓存",
+                    "items": cache_items,
+                },
+            )
         
         session = session_manager.create_session(
             stock_codes=request.stock_codes,
             start_date=start,
             end_date=end,
-            initial_cash=request.initial_cash
+            initial_cash=request.initial_cash,
+            indicator_id=request.indicator_id,
         )
+        if not session.simulator.trading_dates:
+            session_manager.delete_session(session.session_id)
+            raise HTTPException(
+                status_code=422,
+                detail="缓存范围已登记，但区间内没有可用于游戏的交易日数据",
+            )
         
         # 加载第一天
         session.simulator.start_day()
+        if session.indicator_id:
+            try:
+                await _ensure_session_indicator_cache(session)
+            except IndicatorError:
+                session_manager.delete_session(session.session_id)
+                raise
+        session_manager.persist_session(session.session_id)
         
         return GameStartResponse(
             session_id=session.session_id,
             current_date=session.simulator.current_date.isoformat(),
-            trading_dates=[d.isoformat() for d in session.simulator.trading_dates]
+            trading_dates=[d.isoformat() for d in session.simulator.trading_dates],
+            mode="daily",
         )
+    except HTTPException:
+        raise
+    except IndicatorError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"参数错误: {e}")
     except Exception as e:
@@ -212,6 +319,7 @@ async def start_game_from_save(request: StartFromSaveRequest):
         
         # 加载第一天
         session.simulator.start_day()
+        session_manager.persist_session(session.session_id)
         
         return StartFromSaveResponse(
             session_id=session.session_id,
@@ -228,6 +336,22 @@ async def start_game_from_save(request: StartFromSaveRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/sessions", response_model=list[LocalSessionSummaryResponse])
+async def list_local_sessions():
+    """读取本地自动存档，最新保存的会话排在最前。"""
+    engine = session_manager.get_data_engine()
+    result = []
+    for summary in session_manager.list_session_summaries():
+        result.append({
+            **summary,
+            "stock_names": {
+                code: engine.get_cached_stock_name(code)
+                for code in summary["stock_codes"]
+            },
+        })
+    return result
+
+
 @router.get("/{session_id}/state", response_model=GameStateResponse)
 async def get_game_state(session_id: str):
     """获取游戏状态"""
@@ -242,7 +366,10 @@ async def get_game_state(session_id: str):
         session_id=session_id,
         current_date=sim.current_date.isoformat() if sim.current_date else "",
         playback_state=sim.playback_engine.state.value,
-        is_last_day=is_last
+        is_last_day=is_last,
+        date_index=sim.date_index,
+        total_dates=len(sim.trading_dates),
+        mode="daily",
     )
 
 
@@ -286,6 +413,7 @@ async def buy_stock(request: OrderRequest):
     
     try:
         order = sim.buy(request.code, request.price, request.quantity)
+        session_manager.persist_session(request.session_id)
         
         if order.status == OrderStatus.FILLED:
             return OrderResponse(
@@ -322,6 +450,7 @@ async def sell_stock(request: OrderRequest):
     
     try:
         order = sim.sell(request.code, request.price, request.quantity)
+        session_manager.persist_session(request.session_id)
         
         if order.status == OrderStatus.FILLED:
             return OrderResponse(
@@ -361,6 +490,7 @@ async def cancel_order(request: CancelOrderRequest):
         raise HTTPException(status_code=404, detail="会话不存在")
     
     success = session.simulator.cancel_order(request.order_id)
+    session_manager.persist_session(request.session_id)
     
     if success:
         return OrderResponse(
@@ -420,6 +550,7 @@ class TradeHistoryResponse(BaseModel):
     status: str
     filled_price: float | None = None
     filled_quantity: int | None = None
+    filled_date: str | None = None
     fee: float
     order_date: str
     reject_reason: str | None = None
@@ -444,6 +575,7 @@ async def get_trade_history(session_id: str):
             status=o.status.value,
             filled_price=o.filled_price,
             filled_quantity=o.filled_quantity,
+            filled_date=o.filled_date.isoformat() if o.filled_date else None,
             fee=o.fee,
             order_date=o.order_date.isoformat(),
             reject_reason=o.reject_reason
@@ -467,6 +599,7 @@ async def next_day(session_id: str):
     has_next = sim.next_day()
     if has_next:
         sim.start_day()
+    session_manager.persist_session(session_id)
     
     is_last = sim.date_index >= len(sim.trading_dates) - 1
     
@@ -474,7 +607,10 @@ async def next_day(session_id: str):
         session_id=session_id,
         current_date=sim.current_date.isoformat() if sim.current_date else "",
         playback_state=sim.playback_engine.state.value,
-        is_last_day=is_last or not has_next
+        is_last_day=is_last or not has_next,
+        date_index=sim.date_index,
+        total_dates=len(sim.trading_dates),
+        mode="daily",
     )
 
 
@@ -572,6 +708,61 @@ async def get_current_bars(session_id: str):
     return result
 
 
+@router.get("/{session_id}/series/{code}")
+async def get_revealed_daily_series(session_id: str, code: str):
+    """返回截至当前游戏日已经揭示的日线，绝不泄露后续行情。"""
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if code not in session.stock_codes:
+        raise HTTPException(status_code=404, detail="股票不在当前游戏中")
+
+    sim = session.simulator
+    frame = sim.daily_data.get(code)
+    if frame is None or frame.empty or sim.current_date is None:
+        return []
+    revealed = frame[frame["date"] <= sim.current_date]
+    return [
+        {
+            "date": row["date"].isoformat(),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": int(row["volume"]),
+        }
+        for _, row in revealed.iterrows()
+    ]
+
+
+@router.get("/{session_id}/indicator/{code}")
+async def get_current_indicator(session_id: str, code: str):
+    """读取预计算指标，但只返回截至当前游戏日的结果。"""
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if not session.indicator_id:
+        return {"definition": None, "values": []}
+    if code not in session.stock_codes:
+        raise HTTPException(status_code=404, detail="股票不在当前游戏中")
+
+    if session.simulator.current_date is None:
+        return {"definition": None, "values": []}
+    try:
+        definition = await _ensure_session_indicator_cache(session)
+        current_date = session.simulator.current_date.isoformat()
+        return {
+            "definition": definition,
+            "values": [
+                item
+                for item in session.indicator_values_by_code.get(code, [])
+                if item["date"] <= current_date
+            ],
+        }
+    except IndicatorError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 class PlaybackControlRequest(BaseModel):
     """播放控制请求"""
     speed: float = 10.0
@@ -585,6 +776,8 @@ async def pause_playback(session_id: str):
         raise HTTPException(status_code=404, detail="会话不存在")
     
     sim = session.simulator
+    if sim.daily_mode:
+        raise HTTPException(status_code=410, detail="日线模式不提供分时播放")
     
     # 取消 WebSocket 播放任务（如果有）
     from api.routers.websocket import manager
@@ -612,6 +805,8 @@ async def start_playback(session_id: str, request: PlaybackControlRequest):
         raise HTTPException(status_code=404, detail="会话不存在")
     
     sim = session.simulator
+    if sim.daily_mode:
+        raise HTTPException(status_code=410, detail="日线模式不提供分时播放")
     sim.play(request.speed)
     
     return {
@@ -628,6 +823,8 @@ async def single_tick(session_id: str):
         raise HTTPException(status_code=404, detail="会话不存在")
     
     sim = session.simulator
+    if sim.daily_mode:
+        raise HTTPException(status_code=410, detail="日线模式不提供 tick 数据")
     
     # 如果是 IDLE 状态，先切换到 PLAYING
     if sim.playback_engine.state == PlaybackState.IDLE:
@@ -676,5 +873,9 @@ async def check_session_exists(session_id: str):
             "session_id": session_id,
             "current_date": session.simulator.current_date.isoformat() if session.simulator.current_date else "",
             "stock_codes": session.stock_codes,
+            "stock_names": {
+                code: session_manager.get_data_engine().get_cached_stock_name(code)
+                for code in session.stock_codes
+            },
         }
     return {"exists": False}

@@ -83,6 +83,10 @@ async def playback_websocket(websocket: WebSocket, session_id: str):
         log(f"Session NOT FOUND: {session_id}")
         await websocket.close(code=4004, reason="会话不存在")
         return
+
+    if session.simulator.daily_mode:
+        await websocket.close(code=4009, reason="日线模式不提供分时 WebSocket")
+        return
     
     await manager.connect(session_id, websocket)
     
@@ -160,7 +164,7 @@ async def playback_loop(session_id: str, session, speed: float):
                 sim.account.update_prices(prices)
                 
                 # 检查挂单是否可以成交
-                filled_orders = sim.check_pending_orders(prices)
+                filled_orders = sim.check_pending_orders(prices, sim.current_date)
                 if filled_orders:
                     for order in filled_orders:
                         await manager.send_message(session_id, {

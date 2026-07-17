@@ -40,7 +40,8 @@ class Simulator:
     def __init__(
         self,
         data_engine: DataEngine,
-        initial_cash: float = 100000.0
+        initial_cash: float = 100000.0,
+        daily_mode: bool = False,
     ):
         """
         初始化模拟器。
@@ -50,6 +51,7 @@ class Simulator:
             initial_cash: 初始资金，默认 100,000 RMB
         """
         self.data_engine = data_engine
+        self.daily_mode = daily_mode
         self.account = Account(initial_cash=initial_cash)
         self.trading_engine = TradingEngine(self.account)
         self.playback_engine = PlaybackEngine(data_engine)
@@ -65,7 +67,8 @@ class Simulator:
         self,
         stock_codes: list[str],
         start_date: date,
-        end_date: date
+        end_date: date,
+        history_start_date: Optional[date] = None,
     ) -> None:
         """
         初始化模拟器。
@@ -85,15 +88,23 @@ class Simulator:
         self.date_index = 0
         self.net_value_history = []
         
-        # 加载每只股票的日线数据
+        data_start_date = history_start_date or start_date
+
+        # 加载每只股票的日线数据。日线游戏可额外加载开始日前的观察窗口，
+        # 但正式交易日历仍从 start_date 开始。
         for code in stock_codes:
-            df = self.data_engine.get_daily_data(code, start_date, end_date)
+            if self.daily_mode:
+                df = self.data_engine.get_cached_daily_data(code, data_start_date, end_date)
+            else:
+                df = self.data_engine.get_daily_data(code, start_date, end_date)
             self.daily_data[code] = df
         
         # 生成交易日历（使用第一只股票的交易日）
         if stock_codes and not self.daily_data[stock_codes[0]].empty:
             self.trading_dates = sorted(
-                self.daily_data[stock_codes[0]]["date"].tolist()
+                trading_date
+                for trading_date in self.daily_data[stock_codes[0]]["date"].tolist()
+                if trading_date >= start_date
             )
         
         # 设置当前日期
@@ -101,7 +112,17 @@ class Simulator:
             self.current_date = self.trading_dates[0]
         
         # 初始化播放引擎
-        self.playback_engine.setup(stock_codes, start_date, end_date)
+        if self.daily_mode:
+            # 日线模式只保留状态字段兼容旧接口，不加载或生成任何分时数据。
+            self.playback_engine.stock_codes = stock_codes
+            self.playback_engine.trading_dates = self.trading_dates.copy()
+            self.playback_engine.current_date = self.current_date
+            self.playback_engine.date_index = 0
+            self.playback_engine.current_tick_index = 0
+            self.playback_engine.intraday_data = {}
+            self.playback_engine.state = PlaybackState.PAUSED
+        else:
+            self.playback_engine.setup(stock_codes, start_date, end_date)
         
         # 记录初始净值
         if self.current_date:
@@ -168,6 +189,12 @@ class Simulator:
         if self.current_date is None:
             raise InvalidOrderError("模拟器未初始化，请先调用 setup()")
         
+        if self.daily_mode:
+            self.playback_engine.current_date = self.current_date
+            self.playback_engine.current_tick_index = 0
+            self.playback_engine.state = PlaybackState.PAUSED
+            self._update_position_prices()
+            return
         self.playback_engine.load_day(self.current_date)
     
     def play(self, speed: float = 1.0) -> None:
@@ -215,7 +242,11 @@ class Simulator:
         self._ensure_tradable_state()
 
         # 获取当前价格
-        current_price = self.playback_engine.get_current_price(code)
+        if self.daily_mode:
+            bar = self._get_current_daily_bar(code)
+            current_price = bar.close if bar else None
+        else:
+            current_price = self.playback_engine.get_current_price(code)
 
         return self.trading_engine.submit_buy_order(
             code, price, quantity, self.current_date, current_price
@@ -239,7 +270,11 @@ class Simulator:
         self._ensure_tradable_state()
 
         # 获取当前价格
-        current_price = self.playback_engine.get_current_price(code)
+        if self.daily_mode:
+            bar = self._get_current_daily_bar(code)
+            current_price = bar.close if bar else None
+        else:
+            current_price = self.playback_engine.get_current_price(code)
 
         return self.trading_engine.submit_sell_order(
             code, price, quantity, self.current_date, current_price
@@ -261,7 +296,11 @@ class Simulator:
         """获取所有挂单"""
         return self.trading_engine.get_pending_orders()
     
-    def check_pending_orders(self, prices: dict[str, float]) -> list[Order]:
+    def check_pending_orders(
+        self,
+        prices: dict[str, float],
+        current_date: Optional[date] = None,
+    ) -> list[Order]:
         """
         检查挂单是否可以成交。
         
@@ -271,7 +310,10 @@ class Simulator:
         Returns:
             list[Order]: 本次成交的订单列表
         """
-        return self.trading_engine.check_pending_orders(prices)
+        return self.trading_engine.check_pending_orders(
+            prices,
+            current_date or self.current_date,
+        )
     
     def next_day(self) -> bool:
         """
@@ -298,8 +340,17 @@ class Simulator:
         # 记录净值
         self.net_value_history.append((self.current_date, self.account.total_assets))
         
-        # 同步播放引擎
-        self.playback_engine.next_day()
+        # 同步状态。日线模式不调用分时播放引擎，也不会读取分钟数据。
+        if self.daily_mode:
+            self.playback_engine.date_index = self.date_index
+            self.playback_engine.current_date = self.current_date
+            self.playback_engine.state = PlaybackState.PAUSED
+            closing_prices = {
+                code: bar.close for code, bar in self.get_current_bars().items()
+            }
+            self.check_pending_orders(closing_prices, self.current_date)
+        else:
+            self.playback_engine.next_day()
         
         return True
     
@@ -365,7 +416,7 @@ class Simulator:
 
                 # 检查历史挂单能否以当日收盘价成交
                 close_prices = {code: bar.close for code, bar in current_bars.items()}
-                self.trading_engine.check_pending_orders(close_prices)
+                self.trading_engine.check_pending_orders(close_prices, self.current_date)
 
                 # 调用策略函数
                 trade_instructions = strategy(

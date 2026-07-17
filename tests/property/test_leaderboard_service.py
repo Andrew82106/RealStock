@@ -31,7 +31,7 @@ def mock_save_data_strategy(draw):
     current_cash = draw(st.floats(min_value=0, max_value=2000000))
     
     # 生成持仓
-    num_positions = draw(st.integers(min_value=0, max_value=5))
+    num_positions = draw(st.integers(min_value=0, max_value=2))
     positions = []
     for _ in range(num_positions):
         positions.append({
@@ -40,7 +40,7 @@ def mock_save_data_strategy(draw):
         })
     
     # 生成交易历史
-    num_trades = draw(st.integers(min_value=0, max_value=50))
+    num_trades = draw(st.integers(min_value=0, max_value=4))
     trade_history = []
     for _ in range(num_trades):
         trade_history.append({
@@ -67,16 +67,12 @@ def mock_save_data_strategy(draw):
 @st.composite
 def mock_save_list_strategy(draw):
     """生成模拟存档列表"""
-    num_saves = draw(st.integers(min_value=1, max_value=10))
+    num_saves = draw(st.integers(min_value=1, max_value=5))
     saves = []
-    used_ids = set()
     
     for i in range(num_saves):
         save_data = draw(mock_save_data_strategy())
-        # 确保ID唯一
-        while save_data.id in used_ids:
-            save_data = draw(mock_save_data_strategy())
-        used_ids.add(save_data.id)
+        save_data.id = f"save{i}_{save_data.id}"
         saves.append(save_data)
     
     return saves

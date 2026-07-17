@@ -1,423 +1,127 @@
-/**
- * 游戏设置页面 - 带搜索历史和进度条
- */
-import { useState, useEffect, useRef } from 'react';
+import { CheckCircleFilled, CloudDownloadOutlined, ExclamationCircleFilled, PlayCircleFilled, SearchOutlined } from '@ant-design/icons';
+import { Button, DatePicker, InputNumber, Select, Steps, Tag, message } from 'antd';
+import axios from 'axios';
+import dayjs, { type Dayjs } from 'dayjs';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Card,
-  Form,
-  DatePicker,
-  InputNumber,
-  Button,
-  message,
-  Space,
-  Typography,
-  Input,
-  List,
-  Tag,
-  Progress,
-  Divider,
-  Empty,
-  Popconfirm,
-} from 'antd';
-import { 
-  PlayCircleOutlined, 
-  SearchOutlined, 
-  HistoryOutlined,
-  DeleteOutlined,
-  ClearOutlined,
-} from '@ant-design/icons';
-import dayjs from 'dayjs';
-import { stockApi, gameApi } from '../services/api';
-import { 
-  getSearchHistory, 
-  addToSearchHistory, 
-  removeFromSearchHistory,
-  clearSearchHistory,
-  type CachedStock,
-} from '../services/stockCache';
-import type { StockInfo } from '../types';
+import { gameApi, indicatorApi, stockApi } from '../services/api';
+import type { CachePreflight, IndicatorDefinition, StockInfo } from '../types';
 
-const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
-interface FormValues {
-  dateRange: [dayjs.Dayjs, dayjs.Dayjs];
-  initialCash: number;
-}
-
-interface SearchTask {
-  id: string;
-  keyword: string;
-  progress: number;
-  message: string;
-  status: 'searching' | 'done' | 'error';
-  results?: StockInfo[];
+function errorText(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    return typeof detail === 'string' ? detail : detail?.message || error.message;
+  }
+  return error instanceof Error ? error.message : '操作失败';
 }
 
 export default function GameSetup() {
   const navigate = useNavigate();
-  const [form] = Form.useForm<FormValues>();
-  const [loading, setLoading] = useState(false);
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [selectedStocks, setSelectedStocks] = useState<StockInfo[]>([]);
-  const [searchHistory, setSearchHistory] = useState<CachedStock[]>([]);
-  const [searchTasks, setSearchTasks] = useState<SearchTask[]>([]);
-  const cancelFnRef = useRef<(() => void) | null>(null);
+  const [stocks, setStocks] = useState<StockInfo[]>([]);
+  const [codes, setCodes] = useState<string[]>([]);
+  const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs('2019-01-01'), dayjs('2020-12-31')]);
+  const [cash, setCash] = useState(100000);
+  const [indicators, setIndicators] = useState<IndicatorDefinition[]>([]);
+  const [indicatorId, setIndicatorId] = useState<string>();
+  const [cacheResult, setCacheResult] = useState<CachePreflight | null>(null);
+  const [busy, setBusy] = useState<'search' | 'check' | 'download' | 'start' | null>(null);
 
-  // 加载搜索历史
-  useEffect(() => {
-    setSearchHistory(getSearchHistory());
-  }, []);
+  useEffect(() => { indicatorApi.list().then(setIndicators).catch(() => undefined); }, []);
+  useEffect(() => { setCacheResult(null); }, [codes, range]);
 
-  // 搜索股票 - 使用SSE流式搜索
-  const handleSearch = () => {
-    if (!searchKeyword || searchKeyword.length < 2) {
-      message.warning('请输入至少2个字符');
-      return;
-    }
+  const gamePayload = () => ({ stock_codes: codes, start_date: range[0].format('YYYY-MM-DD'), end_date: range[1].format('YYYY-MM-DD') });
+  const cachePayload = () => ({ ...gamePayload(), start_date: range[0].subtract(31, 'day').format('YYYY-MM-DD'), adjust: 'qfq' });
 
-    // 取消之前的搜索
-    if (cancelFnRef.current) {
-      cancelFnRef.current();
-    }
-
-    const taskId = Date.now().toString();
-    const newTask: SearchTask = {
-      id: taskId,
-      keyword: searchKeyword,
-      progress: 0,
-      message: '准备搜索...',
-      status: 'searching',
-    };
-
-    setSearchTasks(prev => [newTask, ...prev.filter(t => t.status !== 'searching')]);
-
-    const cancel = stockApi.searchStockStream(
-      searchKeyword,
-      // onProgress
-      (progress, msg) => {
-        setSearchTasks(prev => prev.map(t => 
-          t.id === taskId ? { ...t, progress, message: msg } : t
-        ));
-      },
-      // onResult
-      (stocks) => {
-        setSearchTasks(prev => prev.map(t => 
-          t.id === taskId ? { ...t, results: stocks } : t
-        ));
-      },
-      // onError
-      (error) => {
-        setSearchTasks(prev => prev.map(t => 
-          t.id === taskId ? { ...t, status: 'error', message: error } : t
-        ));
-        message.error(error);
-      },
-      // onDone
-      () => {
-        setSearchTasks(prev => prev.map(t => 
-          t.id === taskId ? { ...t, status: 'done' } : t
-        ));
-      }
-    );
-
-    cancelFnRef.current = cancel;
+  const search = async (keyword: string) => {
+    if (!keyword.trim()) return;
+    setBusy('search');
+    try { setStocks(await stockApi.getStockList(keyword)); }
+    catch (error) { message.error(errorText(error)); }
+    finally { setBusy(null); }
   };
 
-  // 添加股票
-  const handleAddStock = (stock: StockInfo) => {
-    if (selectedStocks.find(s => s.code === stock.code)) {
-      message.warning('该股票已添加');
-      return;
-    }
-    setSelectedStocks([...selectedStocks, stock]);
-    // 添加到搜索历史
-    addToSearchHistory(stock);
-    setSearchHistory(getSearchHistory());
+  const check = async () => {
+    if (!codes.length) return message.warning('请先选择股票');
+    setBusy('check');
+    try { setCacheResult(await stockApi.preflightCache(cachePayload())); }
+    catch (error) { message.error(errorText(error)); }
+    finally { setBusy(null); }
   };
 
-  // 从历史记录添加
-  const handleAddFromHistory = (stock: CachedStock) => {
-    handleAddStock({ code: stock.code, name: stock.name, market: stock.market });
-  };
-
-  // 移除股票
-  const handleRemoveStock = (code: string) => {
-    setSelectedStocks(selectedStocks.filter(s => s.code !== code));
-  };
-
-  // 删除历史记录
-  const handleRemoveHistory = (code: string) => {
-    removeFromSearchHistory(code);
-    setSearchHistory(getSearchHistory());
-  };
-
-  // 清空历史记录
-  const handleClearHistory = () => {
-    clearSearchHistory();
-    setSearchHistory([]);
-  };
-
-  // 移除搜索任务
-  const handleRemoveTask = (taskId: string) => {
-    setSearchTasks(prev => prev.filter(t => t.id !== taskId));
-  };
-
-  // 开始游戏
-  const handleSubmit = async (values: FormValues) => {
-    if (selectedStocks.length === 0) {
-      message.error('请至少选择一只股票');
-      return;
-    }
-
-    setLoading(true);
+  const download = async () => {
+    setBusy('download');
     try {
-      const response = await gameApi.startGame({
-        stock_codes: selectedStocks.map(s => s.code),
-        start_date: values.dateRange[0].format('YYYY-MM-DD'),
-        end_date: values.dateRange[1].format('YYYY-MM-DD'),
-        initial_cash: values.initialCash,
-      });
-      
-      message.success('游戏初始化成功！');
-      navigate(`/trading/${response.session_id}`);
-    } catch (error) {
-      message.error('游戏初始化失败，请重试');
-      console.error('开始游戏失败:', error);
-    } finally {
-      setLoading(false);
-    }
+      const result = await stockApi.downloadCache(cachePayload()); setCacheResult(result);
+      message.success('缺失范围已下载到本地');
+    } catch (error) { message.error(errorText(error)); }
+    finally { setBusy(null); }
   };
+
+  const start = async () => {
+    if (!cacheResult?.ready) return message.warning('请先通过本地数据检查');
+    setBusy('start');
+    try {
+      const session = await gameApi.startGame({ ...gamePayload(), initial_cash: cash, indicator_id: indicatorId });
+      navigate(`/trading/${session.session_id}`);
+    } catch (error) { message.error(errorText(error)); }
+    finally { setBusy(null); }
+  };
+
+  const currentStep = !codes.length ? 0 : !cacheResult?.ready ? 1 : 2;
+  const lateListingItems = cacheResult?.items.filter((item) => item.data_start && dayjs(item.data_start).isAfter(range[0], 'day')) || [];
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: '#f0f2f5', 
-      padding: '40px 20px',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'flex-start',
-    }}>
-      <Card 
-        style={{ width: '100%', maxWidth: 800 }}
-        title={
-          <Space>
-            <PlayCircleOutlined style={{ fontSize: 24, color: '#1890ff' }} />
-            <Title level={3} style={{ margin: 0 }}>A股模拟交易游戏</Title>
-          </Space>
-        }
-      >
-        <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
-          选择股票和时间范围，开始你的模拟交易之旅
-        </Text>
+    <div className="setup-page">
+      <div className="page-heading"><div><div className="eyebrow">NEW SIMULATION / DAILY ONLY</div><h1>新建日线模拟</h1></div></div>
+      <Steps current={currentStep} items={[{ title: '设置游戏' }, { title: '核对数据' }, { title: '启动模拟' }]} className="setup-steps" />
 
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleSubmit}
-          initialValues={{
-            initialCash: 100000,
-            dateRange: [dayjs().subtract(6, 'month'), dayjs().subtract(1, 'day')],
-          }}
-        >
-          {/* 股票搜索 */}
-          <Form.Item label="搜索股票">
-            <Space.Compact style={{ width: '100%' }}>
-              <Input
-                placeholder="输入股票代码或名称，如：600519 或 茅台"
-                value={searchKeyword}
-                onChange={(e) => setSearchKeyword(e.target.value)}
-                onPressEnter={handleSearch}
-                style={{ flex: 1 }}
-              />
-              <Button 
-                type="primary" 
-                icon={<SearchOutlined />}
-                onClick={handleSearch}
-              >
-                搜索
-              </Button>
-            </Space.Compact>
-          </Form.Item>
+      <div className="setup-grid">
+        <section className="terminal-panel setup-form-panel">
+          <div className="panel-title"><span>游戏设置</span><small>历史行情范围</small></div>
+          <label className="field-label">交易标的（最多 3 只）</label>
+          <Select
+            mode="multiple" maxCount={3} showSearch filterOption={false} loading={busy === 'search'}
+            value={codes} onChange={setCodes} onSearch={search} suffixIcon={<SearchOutlined />}
+            placeholder="输入代码或名称搜索"
+            options={stocks.map((stock) => ({ value: stock.code, label: `${stock.code}  ${stock.name}` }))}
+          />
 
-          {/* 搜索任务列表 */}
-          {searchTasks.length > 0 && (
-            <Form.Item label="搜索任务">
-              <div style={{ 
-                border: '1px solid #d9d9d9', 
-                borderRadius: 6,
-                padding: 12,
-                maxHeight: 300,
-                overflow: 'auto',
-              }}>
-                {searchTasks.map(task => (
-                  <div key={task.id} style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text strong>搜索: {task.keyword}</Text>
-                      <Button 
-                        type="text" 
-                        size="small" 
-                        icon={<DeleteOutlined />}
-                        onClick={() => handleRemoveTask(task.id)}
-                      />
-                    </div>
-                    <Progress 
-                      percent={task.progress} 
-                      status={task.status === 'error' ? 'exception' : task.status === 'done' ? 'success' : 'active'}
-                      size="small"
-                    />
-                    <Text type="secondary" style={{ fontSize: 12 }}>{task.message}</Text>
-                    
-                    {/* 搜索结果 */}
-                    {task.status === 'done' && task.results && task.results.length > 0 && (
-                      <div style={{ 
-                        marginTop: 8, 
-                        maxHeight: 150, 
-                        overflow: 'auto',
-                        background: '#fafafa',
-                        borderRadius: 4,
-                        padding: 8,
-                      }}>
-                        <List
-                          size="small"
-                          dataSource={task.results}
-                          renderItem={(stock) => (
-                            <List.Item
-                              style={{ cursor: 'pointer', padding: '4px 8px' }}
-                              onClick={() => handleAddStock(stock)}
-                            >
-                              <span style={{ fontWeight: 500 }}>{stock.code}</span>
-                              <span style={{ marginLeft: 8, color: '#666' }}>{stock.name}</span>
-                              <Tag color="blue" style={{ marginLeft: 'auto' }}>{stock.market}</Tag>
-                            </List.Item>
-                          )}
-                        />
-                      </div>
-                    )}
-                    {task.status === 'done' && task.results && task.results.length === 0 && (
-                      <Text type="secondary" style={{ fontSize: 12 }}>未找到匹配的股票</Text>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Form.Item>
-          )}
+          <label className="field-label">游戏时间范围</label>
+          <RangePicker value={range} allowClear={false} onChange={(value) => value && setRange(value as [Dayjs, Dayjs])} />
+          <p className="field-help">游戏从所选开始日计时；系统会额外读取此前 31 天的 K 线作为首屏观察窗口和指标预热。</p>
 
-          {/* 搜索历史 */}
-          {searchHistory.length > 0 && (
-            <Form.Item 
-              label={
-                <Space>
-                  <HistoryOutlined />
-                  <span>搜索历史（点击添加）</span>
-                  <Popconfirm
-                    title="确定清空所有历史记录？"
-                    onConfirm={handleClearHistory}
-                    okText="确定"
-                    cancelText="取消"
-                  >
-                    <Button type="link" size="small" icon={<ClearOutlined />}>
-                      清空
-                    </Button>
-                  </Popconfirm>
-                </Space>
-              }
-            >
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {searchHistory.map((stock) => (
-                  <Tag
-                    key={stock.code}
-                    style={{ cursor: 'pointer', padding: '4px 8px' }}
-                    onClick={() => handleAddFromHistory(stock)}
-                    closable
-                    onClose={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleRemoveHistory(stock.code);
-                    }}
-                  >
-                    {stock.code} - {stock.name}
-                  </Tag>
-                ))}
-              </div>
-            </Form.Item>
-          )}
+          <label className="field-label">初始资金</label>
+          <InputNumber value={cash} min={10000} max={100000000} step={10000} addonBefore="¥" onChange={(value) => setCash(value ?? 100000)} />
 
-          <Divider />
+          <label className="field-label">随游戏显示的指标（可选）</label>
+          <Select allowClear value={indicatorId} onChange={setIndicatorId} placeholder="不使用指标" options={indicators.map((item) => ({ value: item.id, label: `${item.name} · ${item.language === 'python' ? 'Python' : `${item.components.length} 分量`}` }))} />
 
-          {/* 已选股票 */}
-          <Form.Item 
-            label={`已选股票 (${selectedStocks.length})`}
-            required
-          >
-            {selectedStocks.length === 0 ? (
-              <Empty 
-                description="请搜索并添加股票，或从历史记录中选择" 
-                style={{ 
-                  padding: 24, 
-                  border: '1px dashed #d9d9d9',
-                  borderRadius: 6,
-                }}
-              />
-            ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {selectedStocks.map((stock) => (
-                  <Tag
-                    key={stock.code}
-                    color="blue"
-                    closable
-                    onClose={() => handleRemoveStock(stock.code)}
-                    style={{ padding: '4px 8px', fontSize: 14 }}
-                  >
-                    {stock.code} - {stock.name}
-                  </Tag>
-                ))}
-              </div>
-            )}
-          </Form.Item>
+          <div className="setup-rule"><strong>运行规则</strong><span>只读本地前复权日线；首屏包含开始日前 31 天行情；每次点击推进一个交易日；图表不显示此后的行情。</span></div>
+        </section>
 
-          <Form.Item
-            name="dateRange"
-            label="回测时间范围"
-            rules={[{ required: true, message: '请选择时间范围' }]}
-          >
-            <RangePicker 
-              style={{ width: '100%' }} 
-              format="YYYY-MM-DD"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="initialCash"
-            label="初始资金（元）"
-            rules={[{ required: true, message: '请输入初始资金' }]}
-          >
-            <InputNumber
-              style={{ width: '100%' }}
-              min={100}
-              max={100000000}
-              step={100}
-              formatter={(value) => `¥ ${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-              parser={(value) => Number(value?.replace(/¥\s?|(,*)/g, '') || 0) as 100}
-            />
-          </Form.Item>
-
-          <Form.Item>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={loading}
-              size="large"
-              block
-              icon={<PlayCircleOutlined />}
-              disabled={selectedStocks.length === 0}
-            >
-              开始游戏
-            </Button>
-          </Form.Item>
-        </Form>
-      </Card>
+        <section className="terminal-panel preflight-panel">
+          <div className="panel-title"><span>启动预检</span><small>游戏中禁止隐式联网</small></div>
+          {!cacheResult && <div className="empty-check"><DatabaseGlyph /><h3>尚未检查数据覆盖</h3><p>系统将比较每只股票的本地缓存范围与游戏范围。</p><Button type="primary" loading={busy === 'check'} disabled={!codes.length} onClick={check}>检查本地数据</Button></div>}
+          {cacheResult && <>
+            <div className={`check-summary ${!cacheResult.ready ? 'missing' : lateListingItems.length ? 'partial' : 'ready'}`}>
+              {cacheResult.ready && !lateListingItems.length ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
+              <div><h3>{!cacheResult.ready ? '缓存范围不完整' : lateListingItems.length ? '可以启动，但部分股票尚未上市' : '可以离线启动'}</h3><p>{!cacheResult.ready ? '下面列出了缺失区间，下载动作需要你明确确认。' : lateListingItems.length ? '这些股票在游戏开始日没有行情，将从实际首个交易日起出现在列表中。' : '所有标的均覆盖整个游戏范围。'}</p></div>
+            </div>
+            <div className="coverage-list">{cacheResult.items.map((item) => <div className="coverage-row" key={item.code}>
+              <div><strong>{item.name || '名称待更新'} <span className="mono">{item.code}</span></strong><span>{item.row_count.toLocaleString()} 条本地日线 · 实际行情 {item.data_start || '无数据'} → {item.data_end || '无数据'}</span></div>
+              {item.complete ? <Tag color={item.data_start && dayjs(item.data_start).isAfter(range[0], 'day') ? 'warning' : 'success'}>{item.data_start && dayjs(item.data_start).isAfter(range[0], 'day') ? `${item.data_start} 起有行情` : '覆盖完整'}</Tag> : <div className="gap-tags">{item.missing_ranges.map((gap) => <Tag color="warning" key={`${gap.start}-${gap.end}`}>{gap.start} → {gap.end}</Tag>)}</div>}
+            </div>)}</div>
+            <div className="preflight-actions"><Button onClick={check} loading={busy === 'check'}>重新检查</Button>{!cacheResult.ready && <Button type="primary" icon={<CloudDownloadOutlined />} loading={busy === 'download'} onClick={download}>明确下载缺失范围</Button>}</div>
+          </>}
+          <Button className="launch-button" type="primary" size="large" block icon={<PlayCircleFilled />} disabled={!cacheResult?.ready} loading={busy === 'start'} onClick={start}>启动日线模拟</Button>
+        </section>
+      </div>
     </div>
   );
+}
+
+function DatabaseGlyph() {
+  return <div className="database-glyph"><span /><span /><span /></div>;
 }

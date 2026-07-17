@@ -49,7 +49,7 @@ def main():
                 color="#f04a32", s=42, zorder=5, label="LRI≥88 买入区")
     ax1.scatter(dates[sell_mask], df["close"][sell_mask], marker="v",
                 color="#2e8b57", s=42, zorder=5, label="LRI≤44 清仓区")
-    ax1.set_title(f"{code} 收盘价与韭菜共振指数 LRI 信号  ({start} ~ {end})", fontsize=13)
+    ax1.set_title(f"{code} 收盘价与 Leek共振指数信号  ({start} ~ {end})", fontsize=13)
     ax1.set_ylabel("收盘价（元）")
     ax1.legend(loc="upper left", fontsize=9)
     ax1.grid(alpha=0.3)

@@ -1,4 +1,4 @@
-"""韭菜共振指数 LRI (Leek Resonance Index) - 一个煞有介事的拍脑袋超级指标。
+"""Leek共振指数 LRI (Leek Resonance Index) - 一个煞有介事的拍脑袋超级指标。
 
 像 RSI/MACD 一样：0-100 振荡、有信号阈值、能画在副图上。
 公式看起来很专业，参数全部拍脑袋：

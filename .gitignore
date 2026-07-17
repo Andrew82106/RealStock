@@ -49,6 +49,8 @@ websocket_debug.log
 data_cache/
 storage/saves/
 storage/stock_data/
+storage/indicators/
+storage/game_sessions/
 
 # Frontend
 frontend/node_modules/

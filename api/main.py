@@ -4,7 +4,7 @@ A股模拟交易系统 - FastAPI 后端服务
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import stocks, game, websocket, saves, achievements, t_trades, challenges, leaderboard
+from api.routers import stocks, game, websocket, saves, achievements, t_trades, challenges, leaderboard, indicators
 
 app = FastAPI(
     title="A股模拟交易系统",
@@ -30,6 +30,7 @@ app.include_router(achievements.router)
 app.include_router(t_trades.router)
 app.include_router(challenges.router)
 app.include_router(leaderboard.router)
+app.include_router(indicators.router)
 
 
 @app.get("/")

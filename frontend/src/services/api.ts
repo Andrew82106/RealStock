@@ -13,6 +13,12 @@ import type {
   GameState,
   PerformanceMetrics,
   AssetHistory,
+  CachePreflight,
+  CacheRequest,
+  CacheStatus,
+  IndicatorDefinition,
+  IndicatorPreview,
+  LocalGameArchive,
 } from '../types';
 
 const api = axios.create({
@@ -89,10 +95,90 @@ export const stockApi = {
     });
     return response.data;
   },
+
+  listCache: async (): Promise<CacheStatus[]> => {
+    const response = await api.get<CacheStatus[]>('/stocks/cache');
+    return response.data;
+  },
+
+  preflightCache: async (request: CacheRequest): Promise<CachePreflight> => {
+    const response = await api.post<CachePreflight>('/stocks/cache/preflight', request);
+    return response.data;
+  },
+
+  downloadCache: async (request: CacheRequest): Promise<CachePreflight> => {
+    const response = await api.post<CachePreflight>('/stocks/cache/download', request, { timeout: 180000 });
+    return response.data;
+  },
+
+  deleteCache: async (code: string, adjust = 'qfq'): Promise<void> => {
+    await api.delete(`/stocks/${code}/cache`, { params: { adjust } });
+  },
+};
+
+export const indicatorApi = {
+  list: async (): Promise<IndicatorDefinition[]> => {
+    const response = await api.get<IndicatorDefinition[]>('/indicators');
+    return response.data;
+  },
+  save: async (definition: IndicatorDefinition): Promise<IndicatorDefinition> => {
+    const response = definition.id
+      ? await api.put<IndicatorDefinition>(`/indicators/${definition.id}`, definition)
+      : await api.post<IndicatorDefinition>('/indicators', definition);
+    return response.data;
+  },
+  remove: async (indicatorId: string): Promise<void> => {
+    await api.delete(`/indicators/${indicatorId}`);
+  },
+  preview: async (payload: {
+    code: string;
+    start_date: string;
+    end_date: string;
+    indicator_id?: string;
+    definition?: IndicatorDefinition;
+  }): Promise<IndicatorPreview> => {
+    const response = await api.post<IndicatorPreview>('/indicators/preview/calculate', payload);
+    return response.data;
+  },
 };
 
 // 游戏相关 API
 export const gameApi = {
+  listSessions: async (): Promise<LocalGameArchive[]> => {
+    const response = await api.get<Array<{
+      session_id: string;
+      created_at: string;
+      updated_at: string;
+      current_date: string;
+      start_date: string;
+      end_date: string;
+      stock_codes: string[];
+      stock_names: Record<string, string | null>;
+      initial_cash: number;
+      total_assets: number;
+      indicator_id?: string;
+      date_index: number;
+      total_dates: number;
+      is_last_day: boolean;
+    }>>('/game/sessions');
+    return response.data.map((item) => ({
+      sessionId: item.session_id,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      currentDate: item.current_date,
+      startDate: item.start_date,
+      endDate: item.end_date,
+      stockCodes: item.stock_codes,
+      stockNames: item.stock_names,
+      initialCash: item.initial_cash,
+      totalAssets: item.total_assets,
+      indicatorId: item.indicator_id,
+      dateIndex: item.date_index,
+      totalDates: item.total_dates,
+      isLastDay: item.is_last_day,
+    }));
+  },
+
   // 开始游戏
   startGame: async (request: GameStartRequest): Promise<GameStartResponse> => {
     const response = await api.post<GameStartResponse>('/game/start', request);
@@ -124,12 +210,18 @@ export const gameApi = {
       current_date: string;
       playback_state: string;
       is_last_day: boolean;
+      date_index: number;
+      total_dates: number;
+      mode: 'daily';
     }>(`/game/${sessionId}/state`);
     return {
       sessionId: response.data.session_id,
       currentDate: response.data.current_date,
       playbackState: response.data.playback_state as GameState['playbackState'],
       isLastDay: response.data.is_last_day,
+      dateIndex: response.data.date_index,
+      totalDates: response.data.total_dates,
+      mode: response.data.mode,
     };
   },
 
@@ -184,12 +276,18 @@ export const gameApi = {
       current_date: string;
       playback_state: string;
       is_last_day: boolean;
+      date_index: number;
+      total_dates: number;
+      mode: 'daily';
     }>(`/game/${sessionId}/next-day`);
     return {
       sessionId: response.data.session_id,
       currentDate: response.data.current_date,
       playbackState: response.data.playback_state as GameState['playbackState'],
       isLastDay: response.data.is_last_day,
+      dateIndex: response.data.date_index,
+      totalDates: response.data.total_dates,
+      mode: response.data.mode,
     };
   },
 
@@ -222,6 +320,16 @@ export const gameApi = {
     const response = await api.get<Record<string, DailyBar>>(
       `/game/${sessionId}/bars`
     );
+    return response.data;
+  },
+
+  getRevealedSeries: async (sessionId: string, code: string): Promise<DailyBar[]> => {
+    const response = await api.get<DailyBar[]>(`/game/${sessionId}/series/${code}`);
+    return response.data;
+  },
+
+  getCurrentIndicator: async (sessionId: string, code: string): Promise<IndicatorPreview> => {
+    const response = await api.get<IndicatorPreview>(`/game/${sessionId}/indicator/${code}`);
     return response.data;
   },
 
@@ -303,12 +411,14 @@ export const gameApi = {
     session_id?: string;
     current_date?: string;
     stock_codes?: string[];
+    stock_names?: Record<string, string | null>;
   }> => {
     const response = await api.get<{
       exists: boolean;
       session_id?: string;
       current_date?: string;
       stock_codes?: string[];
+      stock_names?: Record<string, string | null>;
     }>(`/game/${sessionId}/exists`);
     return response.data;
   },
@@ -362,6 +472,7 @@ export const gameApi = {
     status: string;
     filledPrice: number | null;
     filledQuantity: number | null;
+    filledDate: string | null;
     fee: number;
     orderDate: string;
     rejectReason: string | null;
@@ -375,6 +486,7 @@ export const gameApi = {
       status: string;
       filled_price: number | null;
       filled_quantity: number | null;
+      filled_date: string | null;
       fee: number;
       order_date: string;
       reject_reason: string | null;
@@ -388,6 +500,7 @@ export const gameApi = {
       status: o.status,
       filledPrice: o.filled_price,
       filledQuantity: o.filled_quantity,
+      filledDate: o.filled_date,
       fee: o.fee,
       orderDate: o.order_date,
       rejectReason: o.reject_reason,

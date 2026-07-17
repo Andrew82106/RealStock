@@ -41,6 +41,37 @@ class DailyBarResponse(BaseModel):
     volume: int
 
 
+class CacheRange(BaseModel):
+    start: str
+    end: str
+
+
+class CacheStatusResponse(BaseModel):
+    code: str
+    name: str | None = None
+    adjust: str
+    complete: bool
+    ranges: list[CacheRange]
+    missing_ranges: list[CacheRange]
+    row_count: int
+    data_start: str | None = None
+    data_end: str | None = None
+    file_size: int
+    updated_at: str | None = None
+
+
+class CacheDownloadRequest(BaseModel):
+    stock_codes: list[str]
+    start_date: str
+    end_date: str
+    adjust: str = "qfq"
+
+
+class CachePreflightResponse(BaseModel):
+    ready: bool
+    items: list[CacheStatusResponse]
+
+
 @router.get("/", response_model=list[StockInfoResponse])
 async def get_stock_list(
     keyword: str = Query(default="", description="搜索关键词")
@@ -143,11 +174,79 @@ async def search_stock_stream(
     )
 
 
+@router.get("/cache", response_model=list[CacheStatusResponse])
+async def list_daily_cache():
+    """列出真实保存在后端磁盘上的日线缓存。"""
+    return get_data_engine().list_daily_cache()
+
+
+@router.post("/cache/preflight", response_model=CachePreflightResponse)
+async def preflight_daily_cache(request: CacheDownloadRequest):
+    """检查游戏日期范围是否已经全部缓存，不触发联网。"""
+    try:
+        start = date.fromisoformat(request.start_date)
+        end = date.fromisoformat(request.end_date)
+        items = [
+            get_data_engine().get_cache_status(code, start, end, request.adjust)
+            for code in request.stock_codes
+        ]
+        return CachePreflightResponse(
+            ready=bool(items) and all(item["complete"] for item in items),
+            items=items,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"日期格式错误: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/cache/download", response_model=CachePreflightResponse)
+async def download_daily_cache(request: CacheDownloadRequest):
+    """显式下载并持久化游戏所需的日线数据。"""
+    try:
+        if not request.stock_codes:
+            raise ValueError("请至少选择一只股票")
+        start = date.fromisoformat(request.start_date)
+        end = date.fromisoformat(request.end_date)
+        engine = get_data_engine()
+        items = []
+        for code in request.stock_codes:
+            items.append(await asyncio.to_thread(
+                engine.ensure_daily_cache, code, start, end, request.adjust
+            ))
+        return CachePreflightResponse(
+            ready=all(item["complete"] for item in items),
+            items=items,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.delete("/{code}/cache")
+async def delete_daily_cache(
+    code: str,
+    adjust: str = Query(default="qfq", description="复权方式")
+):
+    """删除指定股票的本地日线缓存。"""
+    try:
+        deleted = get_data_engine().delete_daily_cache(code, adjust)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="缓存不存在")
+        return {"success": True, "code": code, "adjust": adjust}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{code}/daily", response_model=list[DailyBarResponse])
 async def get_daily_data(
     code: str,
     start_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
-    end_date: str = Query(..., description="结束日期 YYYY-MM-DD")
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    cache_only: bool = Query(default=True, description="只读本地缓存")
 ):
     """
     获取股票日线数据
@@ -162,7 +261,10 @@ async def get_daily_data(
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
         
-        df = engine.get_daily_data(code, start, end)
+        if cache_only:
+            df = engine.get_cached_daily_data(code, start, end)
+        else:
+            df = engine.get_daily_data(code, start, end)
         
         if df.empty:
             return []

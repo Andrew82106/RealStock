@@ -1,560 +1,95 @@
-/**
- * 主页 - 存档列表
- * Requirements: 1.1, 1.2, 1.3, 2.1, 2.2, 6.1, 6.2, 16.1, 16.2, 16.5, 16.6
- */
-import { useState, useEffect, useCallback } from 'react';
+import { ArrowRightOutlined, DatabaseOutlined, ExperimentOutlined, FolderOpenOutlined, LineChartOutlined } from '@ant-design/icons';
+import { Button, Empty, Spin, Tag, message } from 'antd';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Card,
-  Button,
-  List,
-  Typography,
-  Space,
-  Modal,
-  Form,
-  Input,
-  InputNumber,
-  DatePicker,
-  message,
-  Empty,
-  Spin,
-  Popconfirm,
-  Tag,
-  Tooltip,
-  Segmented,
-} from 'antd';
-import type { Dayjs } from 'dayjs';
-import {
-  PlusOutlined,
-  PlayCircleOutlined,
-  DeleteOutlined,
-  FolderOpenOutlined,
-  ClockCircleOutlined,
-  DollarOutlined,
-  StockOutlined,
-  SettingOutlined,
-  TrophyOutlined,
-  RocketOutlined,
-} from '@ant-design/icons';
-import dayjs from 'dayjs';
-import { saveApi } from '../services/saveApi';
-import { challengeApi } from '../services/challengeApi';
-import { useTheme } from '../contexts/ThemeContext';
-import SettingsModal from '../components/SettingsModal';
-import ChallengeSelector from '../components/ChallengeSelector';
-import type { SaveMetadata, GameMode, ChallengeConfig } from '../types';
+import { gameApi, indicatorApi, stockApi } from '../services/api';
+import type { LocalGameArchive } from '../types';
 
-const { Title, Text } = Typography;
-
-interface CreateSaveFormValues {
-  name: string;
-  initialCash: number;
-  startDate: Dayjs;
+interface Overview {
+  caches: number;
+  rows: number;
+  indicators: number;
 }
 
 export default function HomePage() {
   const navigate = useNavigate();
-  const { theme } = useTheme();
-  const [saves, setSaves] = useState<SaveMetadata[]>([]);
   const [loading, setLoading] = useState(true);
-  const [createModalVisible, setCreateModalVisible] = useState(false);
-  const [settingsVisible, setSettingsVisible] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [form] = Form.useForm<CreateSaveFormValues>();
-  
-  // 游戏模式相关状态
-  const [gameMode, setGameMode] = useState<GameMode>('free');
-  const [challenges, setChallenges] = useState<ChallengeConfig[]>([]);
-  const [loadingChallenges, setLoadingChallenges] = useState(false);
-  const [selectedChallenge, setSelectedChallenge] = useState<ChallengeConfig | null>(null);
-
-  // 加载存档列表
-  const loadSaves = useCallback(async () => {
-    try {
-      setLoading(true);
-      const data = await saveApi.listSaves();
-      // 按更新时间倒序排列
-      data.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-      setSaves(data);
-    } catch (error) {
-      console.error('Failed to load saves:', error);
-      message.error('加载存档列表失败');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [overview, setOverview] = useState<Overview>({ caches: 0, rows: 0, indicators: 0 });
+  const [archives, setArchives] = useState<LocalGameArchive[]>([]);
 
   useEffect(() => {
-    loadSaves();
-  }, [loadSaves]);
-
-  // 加载挑战列表
-  const loadChallenges = useCallback(async () => {
-    try {
-      setLoadingChallenges(true);
-      const data = await challengeApi.getAvailableChallenges();
-      setChallenges(data);
-    } catch (error) {
-      console.error('Failed to load challenges:', error);
-      message.error('加载挑战列表失败');
-    } finally {
-      setLoadingChallenges(false);
-    }
+    Promise.all([stockApi.listCache(), indicatorApi.list(), gameApi.listSessions()])
+      .then(([cache, indicators, localArchives]) => {
+        setOverview({
+        caches: cache.length,
+        rows: cache.reduce((sum, item) => sum + item.row_count, 0),
+        indicators: indicators.length,
+        });
+        setArchives(localArchives);
+      })
+      .catch(() => message.error('本地数据或存档列表读取失败'))
+      .finally(() => setLoading(false));
   }, []);
-
-  // 当打开创建弹窗且选择挑战模式时加载挑战列表
-  useEffect(() => {
-    if (createModalVisible && gameMode === 'challenge' && challenges.length === 0) {
-      loadChallenges();
-    }
-  }, [createModalVisible, gameMode, challenges.length, loadChallenges]);
-
-  // 创建新存档
-  const handleCreate = async (values: CreateSaveFormValues) => {
-    try {
-      setCreating(true);
-      const startDateStr = values.startDate.format('YYYY-MM-DD');
-      const saveData = await saveApi.createSave(values.name, values.initialCash, startDateStr);
-      message.success('存档创建成功！');
-      setCreateModalVisible(false);
-      form.resetFields();
-      setGameMode('free');
-      setSelectedChallenge(null);
-      // 导航到交易页面
-      navigate(`/trading/${saveData.id}`);
-    } catch (error: unknown) {
-      console.error('Failed to create save:', error);
-      if (error && typeof error === 'object' && 'response' in error) {
-        const axiosError = error as { response?: { status?: number; data?: { detail?: string } } };
-        if (axiosError.response?.status === 409) {
-          message.error('存档名称已存在，请使用其他名称');
-        } else if (axiosError.response?.status === 400) {
-          message.error(axiosError.response?.data?.detail || '存档名称无效');
-        } else {
-          message.error('创建存档失败');
-        }
-      } else {
-        message.error('创建存档失败');
-      }
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // 创建挑战存档
-  const handleCreateChallenge = async (challenge: ChallengeConfig) => {
-    try {
-      setCreating(true);
-      const result = await challengeApi.createChallenge({
-        name: `${challenge.name}_${Date.now()}`,
-        challengeId: challenge.id,
-      });
-      message.success('挑战存档创建成功！');
-      setCreateModalVisible(false);
-      setGameMode('free');
-      setSelectedChallenge(null);
-      // 导航到交易页面
-      navigate(`/trading/${result.saveId}`);
-    } catch (error: unknown) {
-      console.error('Failed to create challenge:', error);
-      message.error('创建挑战存档失败');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  // 选择挑战
-  const handleSelectChallenge = (challenge: ChallengeConfig) => {
-    setSelectedChallenge(challenge);
-  };
-
-  // 删除存档
-  const handleDelete = async (saveId: string) => {
-    try {
-      setDeleting(saveId);
-      await saveApi.deleteSave(saveId);
-      message.success('存档已删除');
-      setSaves(saves.filter(s => s.id !== saveId));
-    } catch (error) {
-      console.error('Failed to delete save:', error);
-      message.error('删除存档失败');
-    } finally {
-      setDeleting(null);
-    }
-  };
-
-  // 加载存档并进入交易页面
-  const handleLoadSave = (saveId: string) => {
-    navigate(`/trading/${saveId}`);
-  };
-
-  // 格式化日期时间
-  const formatDateTime = (dateStr: string) => {
-    return dayjs(dateStr).format('YYYY-MM-DD HH:mm');
-  };
-
-  // 格式化金额
-  const formatMoney = (amount: number) => {
-    return `¥${amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: theme === 'dark' 
-        ? 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)'
-        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      padding: '40px 20px',
-    }}>
-      <div style={{ maxWidth: 900, margin: '0 auto' }}>
-        {/* 标题区域 */}
-        <div style={{ textAlign: 'center', marginBottom: 32, position: 'relative' }}>
-          {/* 设置按钮 */}
-          <Button
-            type="text"
-            icon={<SettingOutlined />}
-            onClick={() => setSettingsVisible(true)}
-            style={{
-              position: 'absolute',
-              right: 0,
-              top: 0,
-              color: 'rgba(255,255,255,0.8)',
-              fontSize: 18,
-            }}
-          >
-            设置
+    <div className="page-stack">
+      <section className="hero-terminal">
+        <div className="eyebrow">REALSTOCK / A-SHARE SIMULATOR</div>
+        <h1>重走历史行情，练习你的<br /><span>交易判断</span></h1>
+        <p>选择一段真实的 A 股历史日线，在逐日推进的行情中设计指标、管理仓位并检验交易策略。</p>
+        <div className="hero-actions">
+          <Button type="primary" size="large" icon={<LineChartOutlined />} onClick={() => navigate('/setup')}>
+            新建日线模拟
           </Button>
-          
-          <Title level={2} style={{ color: '#fff', marginBottom: 8 }}>
-            🥬 韭菜模拟器
-          </Title>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 16 }}>
-            在这里体验股市的酸甜苦辣，成为一棵坚强的韭菜！
-          </Text>
+          <Button size="large" icon={<FolderOpenOutlined />} onClick={() => document.getElementById('local-archives')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>读取本地存档</Button>
+          <Button size="large" onClick={() => navigate('/data')}>管理本地数据</Button>
         </div>
+      </section>
 
-        {/* 存档列表卡片 */}
-        <Card
-          title={
-            <Space>
-              <FolderOpenOutlined />
-              <span>我的存档</span>
-              <Tag color="blue">{saves.length} 个</Tag>
-            </Space>
-          }
-          extra={
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setCreateModalVisible(true)}
-            >
-              新建存档
-            </Button>
-          }
-          style={{ borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.1)' }}
-        >
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: 60 }}>
-              <Spin size="large" />
-              <div style={{ marginTop: 16 }}>加载存档列表...</div>
-            </div>
-          ) : saves.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="还没有存档，点击右上角按钮创建第一个存档"
-              style={{ padding: '60px 0' }}
-            />
-          ) : (
-            <List
-              dataSource={saves}
-              renderItem={(save) => (
-                <List.Item
-                  style={{
-                    padding: '16px',
-                    marginBottom: 12,
-                    background: theme === 'dark' ? '#21262d' : '#fafafa',
-                    borderRadius: 8,
-                    border: theme === 'dark' ? '1px solid #30363d' : '1px solid #f0f0f0',
-                    cursor: 'pointer',
-                    transition: 'all 0.3s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = theme === 'dark' ? '#30363d' : '#e6f7ff';
-                    e.currentTarget.style.borderColor = theme === 'dark' ? '#58a6ff' : '#91d5ff';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = theme === 'dark' ? '#21262d' : '#fafafa';
-                    e.currentTarget.style.borderColor = theme === 'dark' ? '#30363d' : '#f0f0f0';
-                  }}
-                  onClick={() => handleLoadSave(save.id)}
-                  actions={[
-                    <Tooltip title="进入游戏" key="play">
-                      <Button
-                        type="primary"
-                        icon={<PlayCircleOutlined />}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleLoadSave(save.id);
-                        }}
-                      >
-                        继续
-                      </Button>
-                    </Tooltip>,
-                    <Popconfirm
-                      key="delete"
-                      title="确定删除此存档？"
-                      description="删除后无法恢复，请谨慎操作"
-                      onConfirm={(e) => {
-                        e?.stopPropagation();
-                        handleDelete(save.id);
-                      }}
-                      onCancel={(e) => e?.stopPropagation()}
-                      okText="确定删除"
-                      cancelText="取消"
-                      okButtonProps={{ danger: true }}
-                    >
-                      <Button
-                        danger
-                        icon={<DeleteOutlined />}
-                        loading={deleting === save.id}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        删除
-                      </Button>
-                    </Popconfirm>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={
-                      <Space>
-                        <Text strong style={{ fontSize: 16 }}>{save.name}</Text>
-                        {save.stockCount > 0 && (
-                          <Tag icon={<StockOutlined />} color="green">
-                            {save.stockCount} 只股票
-                          </Tag>
-                        )}
-                      </Space>
-                    }
-                    description={
-                      <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
-                        <Space split={<span style={{ color: theme === 'dark' ? '#484f58' : '#d9d9d9' }}>|</span>}>
-                          <Tooltip title="当前模拟日期">
-                            <Text type="secondary">
-                              <ClockCircleOutlined style={{ marginRight: 4 }} />
-                              模拟日期: {save.currentDate}
-                            </Text>
-                          </Tooltip>
-                          <Tooltip title="总资产">
-                            <Text type="secondary">
-                              <DollarOutlined style={{ marginRight: 4 }} />
-                              总资产: {formatMoney(save.totalAssets)}
-                            </Text>
-                          </Tooltip>
-                        </Space>
-                        <Space split={<span style={{ color: theme === 'dark' ? '#484f58' : '#d9d9d9' }}>|</span>}>
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            创建: {formatDateTime(save.createdAt)}
-                          </Text>
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            更新: {formatDateTime(save.updatedAt)}
-                          </Text>
-                        </Space>
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-          )}
-        </Card>
-      </div>
+      <Spin spinning={loading}>
+        <section className="market-strip">
+          <div><span>已缓存标的</span><strong>{overview.caches}</strong><small>只 / 复权组合</small></div>
+          <div><span>本地日线</span><strong>{overview.rows.toLocaleString()}</strong><small>条 OHLCV</small></div>
+          <div><span>指标文件</span><strong>{overview.indicators}</strong><small>个本地定义</small></div>
+          <div><span>运行数据源</span><strong className="text-gold">LOCAL</strong><small>游戏中不联网</small></div>
+        </section>
+      </Spin>
 
-      {/* 创建存档弹窗 */}
-      <Modal
-        title={
-          <Space>
-            <PlusOutlined />
-            <span>创建新存档</span>
-          </Space>
-        }
-        open={createModalVisible}
-        onCancel={() => {
-          setCreateModalVisible(false);
-          form.resetFields();
-          setGameMode('free');
-          setSelectedChallenge(null);
-        }}
-        footer={null}
-        destroyOnClose
-        width={gameMode === 'challenge' ? 700 : 520}
-      >
-        {/* 游戏模式选择 */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ marginBottom: 8, fontWeight: 500 }}>选择游戏模式</div>
-          <Segmented
-            block
-            value={gameMode}
-            onChange={(value) => {
-              setGameMode(value as GameMode);
-              setSelectedChallenge(null);
-            }}
-            options={[
-              {
-                value: 'free',
-                label: (
-                  <div style={{ padding: '8px 0' }}>
-                    <RocketOutlined style={{ marginRight: 8, color: '#3fb950' }} />
-                    <span>自由模式</span>
-                    <div style={{ fontSize: 11, color: 'var(--ant-color-text-secondary)', marginTop: 4 }}>
-                      自定义资金、日期和股票
-                    </div>
-                  </div>
-                ),
-              },
-              {
-                value: 'challenge',
-                label: (
-                  <div style={{ padding: '8px 0' }}>
-                    <TrophyOutlined style={{ marginRight: 8, color: '#f0883e' }} />
-                    <span>挑战模式</span>
-                    <div style={{ fontSize: 11, color: 'var(--ant-color-text-secondary)', marginTop: 4 }}>
-                      固定条件，达成目标
-                    </div>
-                  </div>
-                ),
-              },
-            ]}
-          />
-        </div>
+      <section className="archive-panel terminal-panel" id="local-archives">
+        <div className="panel-title"><span>本地自动存档</span><small>交易、挂单和每日推进后自动保存；服务重启后仍可继续</small></div>
+        {archives.length ? <div className="archive-list">{archives.map((archive) => {
+          const progress = archive.totalDates ? ((archive.dateIndex + 1) / archive.totalDates) * 100 : 0;
+          const returnRate = archive.initialCash > 0 ? archive.totalAssets / archive.initialCash - 1 : 0;
+          return <article className="archive-row" key={archive.sessionId}>
+            <div className="archive-identity"><strong>模拟 {archive.startDate} — {archive.endDate}</strong><span className="mono">{archive.sessionId}</span></div>
+            <div className="archive-stocks"><span>股票</span><strong>{archive.stockCodes.map((code) => archive.stockNames[code] ? `${archive.stockNames[code]} ${code}` : code).join(' · ')}</strong></div>
+            <div><span>当前日期</span><strong className="mono">{archive.currentDate}</strong><small>{archive.dateIndex + 1} / {archive.totalDates} 日 · {progress.toFixed(0)}%</small></div>
+            <div><span>当前资产</span><strong className="mono">¥{archive.totalAssets.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><small className={returnRate >= 0 ? 'market-up' : 'market-down'}>{returnRate >= 0 ? '+' : ''}{(returnRate * 100).toFixed(2)}%</small></div>
+            <div><span>最后保存</span><strong>{new Date(archive.updatedAt).toLocaleString('zh-CN', { hour12: false })}</strong><Tag color={archive.isLastDay ? 'default' : 'success'}>{archive.isLastDay ? '已结束' : '可继续'}</Tag></div>
+            <Button type="primary" icon={<FolderOpenOutlined />} onClick={() => navigate(`/trading/${archive.sessionId}`)}>读取存档</Button>
+          </article>;
+        })}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有本地存档，新建模拟后系统会自动保存" />}
+      </section>
 
-        {/* 自由模式表单 */}
-        {gameMode === 'free' && (
-          <Form
-            form={form}
-            layout="vertical"
-            onFinish={handleCreate}
-            initialValues={{ initialCash: 100000, startDate: dayjs().subtract(1, 'year') }}
-          >
-            <Form.Item
-              name="name"
-              label="存档名称"
-              rules={[
-                { required: true, message: '请输入存档名称' },
-                { whitespace: true, message: '存档名称不能为空' },
-                { max: 50, message: '存档名称不能超过50个字符' },
-              ]}
-            >
-              <Input
-                placeholder="例如：我的第一个存档"
-                maxLength={50}
-                showCount
-              />
-            </Form.Item>
+      <section className="workflow-grid">
+        <button className="workflow-card" onClick={() => navigate('/data')}>
+          <span className="step-index">01</span><DatabaseOutlined />
+          <h2>准备行情</h2><p>设定缓存范围，下载后检查覆盖缺口和实际行数。</p><span className="card-link">进入数据中心 <ArrowRightOutlined /></span>
+        </button>
+        <button className="workflow-card" onClick={() => navigate('/indicators')}>
+          <span className="step-index">02</span><ExperimentOutlined />
+          <h2>设计指标</h2><p>按固定接口编写 Python 指标，用本地日线实时运行和预览信号。</p><span className="card-link">进入指标工坊 <ArrowRightOutlined /></span>
+        </button>
+        <button className="workflow-card" onClick={() => navigate('/setup')}>
+          <span className="step-index">03</span><LineChartOutlined />
+          <h2>开始模拟</h2><p>游戏范围必须被缓存覆盖，随后逐个交易日揭示行情和指标。</p><span className="card-link">配置新模拟 <ArrowRightOutlined /></span>
+        </button>
+      </section>
 
-            <Form.Item
-              name="initialCash"
-              label="初始资金（元）"
-              rules={[{ required: true, message: '请输入初始资金' }]}
-            >
-              <InputNumber
-                style={{ width: '100%' }}
-                min={100}
-                max={100000000}
-                step={100}
-                formatter={(value) => `¥ ${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-                parser={(value) => Number(value?.replace(/¥\s?|(,*)/g, '') || 0) as 100}
-              />
-            </Form.Item>
-
-            <Form.Item
-              name="startDate"
-              label="开始日期"
-              rules={[{ required: true, message: '请选择开始日期' }]}
-              extra="模拟交易将从此日期开始"
-            >
-              <DatePicker 
-                style={{ width: '100%' }}
-                disabledDate={(current) => current && current > dayjs().subtract(1, 'day')}
-                placeholder="选择开始日期"
-              />
-            </Form.Item>
-
-            <Form.Item style={{ marginBottom: 0, marginTop: 24 }}>
-              <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-                <Button onClick={() => {
-                  setCreateModalVisible(false);
-                  form.resetFields();
-                  setGameMode('free');
-                }}>
-                  取消
-                </Button>
-                <Button type="primary" htmlType="submit" loading={creating}>
-                  创建并开始
-                </Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        )}
-
-        {/* 挑战模式选择器 */}
-        {gameMode === 'challenge' && (
-          <div>
-            {selectedChallenge ? (
-              <div>
-                {/* 已选择挑战的确认界面 */}
-                <Card
-                  style={{ marginBottom: 16 }}
-                  title={
-                    <Space>
-                      <TrophyOutlined style={{ color: '#f0883e' }} />
-                      <span>{selectedChallenge.name}</span>
-                    </Space>
-                  }
-                >
-                  <p>{selectedChallenge.description}</p>
-                  <Space wrap>
-                    <Tag color="blue">初始资金: ¥{selectedChallenge.initialCash.toLocaleString()}</Tag>
-                    <Tag color="green">目标资产: ¥{selectedChallenge.targetAssets.toLocaleString()}</Tag>
-                    <Tag color="orange">
-                      目标收益: {((selectedChallenge.targetAssets - selectedChallenge.initialCash) / selectedChallenge.initialCash * 100).toFixed(0)}%
-                    </Tag>
-                  </Space>
-                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--ant-color-text-secondary)' }}>
-                    股票: {selectedChallenge.stockName} ({selectedChallenge.stockCode})
-                    <br />
-                    时间: {selectedChallenge.startDate} ~ {selectedChallenge.endDate}
-                  </div>
-                </Card>
-                <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-                  <Button onClick={() => setSelectedChallenge(null)}>
-                    重新选择
-                  </Button>
-                  <Button 
-                    type="primary" 
-                    loading={creating}
-                    onClick={() => handleCreateChallenge(selectedChallenge)}
-                  >
-                    开始挑战
-                  </Button>
-                </Space>
-              </div>
-            ) : (
-              <ChallengeSelector
-                challenges={challenges}
-                loading={loadingChallenges}
-                onSelect={handleSelectChallenge}
-              />
-            )}
-          </div>
-        )}
-      </Modal>
-
-      {/* 设置弹窗 */}
-      <SettingsModal
-        open={settingsVisible}
-        onClose={() => setSettingsVisible(false)}
-      />
+      <section className="rule-panel">
+        <div><span className="rule-label">核心约束</span><h3>缓存范围与游戏范围分开设置</h3></div>
+        <p>缓存可以大于游戏区间，便于复用；不能小于游戏区间。若存在缺口，启动按钮会被锁定并直接告诉你缺哪一段。</p>
+      </section>
     </div>
   );
 }

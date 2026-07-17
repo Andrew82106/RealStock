@@ -72,7 +72,7 @@ function calculateMACD(closes: number[], fast = 12, slow = 26, signal = 9) {
   return { dif, dea, macd };
 }
 
-// 计算韭菜共振指数 LRI (Leek Resonance Index)
+// 计算 Leek共振指数 LRI (Leek Resonance Index)
 // 与后端 experiments/holy_grail/grail_indicator.py 完全一致：
 //   动量共振核 M = 0.7·EMA3(日收益%) + 0.3·EMA8(日收益%)
 //   量能激励项 V = ln(1 + Vol / MA5(Vol))
@@ -206,7 +206,7 @@ export default function StockChart({
     // 计算 MACD
     const macdData = calculateMACD(closes);
 
-    // 计算韭菜共振指数 LRI
+    // 计算 Leek共振指数 LRI
     const lri = calculateLRI(closes.map((c, i) => ({ close: c, volume: dailyData[i].volume })));
 
     return { dates, ohlc, volumes, closes, ma5, ma10, ma20, ma50, ma100, ma120, macdData, lri };
@@ -374,7 +374,7 @@ export default function StockChart({
         { left: '10%', right: '3%', top: '10%', height: '36%' },  // K线
         { left: '10%', right: '3%', top: '50%', height: '10%' },  // 成交量
         { left: '10%', right: '3%', top: '63%', height: '10%' },  // MACD
-        { left: '10%', right: '3%', top: '76%', height: '13%' },  // LRI 韭菜共振指数
+        { left: '10%', right: '3%', top: '76%', height: '13%' },  // LRI Leek共振指数
       ],
       xAxis: [
         { type: 'category', data: dates, gridIndex: 0, axisLine: { lineStyle: { color: colors.border } }, axisLabel: { show: false }, axisTick: { show: false } },
@@ -395,7 +395,7 @@ export default function StockChart({
       graphic: [
         {
           type: 'text', left: '10%', top: '73.5%',
-          style: { text: '韭菜共振指数 LRI（≥88 买入 / ≤44 清仓）', fontSize: 10, fill: '#e879f9', fontWeight: 600 },
+          style: { text: 'Leek共振指数（≥88 买入 / ≤44 清仓）', fontSize: 10, fill: '#e879f9', fontWeight: 600 },
           silent: true,
         },
       ],

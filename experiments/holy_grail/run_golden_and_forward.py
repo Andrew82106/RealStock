@@ -12,7 +12,7 @@
 
 用法:
     python experiments/holy_grail/run_golden_and_forward.py <code> <buy_pct> <sell_pct> <window_start> <window_end> [strategy]
-    strategy: chase(默认) 或 lri（韭菜共振指数，忽略 buy_pct/sell_pct 参数）
+    strategy: chase(默认) 或 lri（Leek共振指数，忽略 buy_pct/sell_pct 参数）
 例:
     python experiments/holy_grail/run_golden_and_forward.py 002432 3 5 2021-11-09 2021-12-08
     python experiments/holy_grail/run_golden_and_forward.py 002583 0 0 2024-09-25 2024-10-31 lri
@@ -132,7 +132,7 @@ def main():
         forward_start = dates[max(we_idx - warmup + 1, 0)]
         strategy_factory = lambda: GrailIndicatorStrategy(warmup_days=warmup)
         prefix = f"{code}_lri"
-        print(f"股票 {code} | 韭菜共振指数 LRI（≥88买入 / ≤44清仓，预热{warmup}日）")
+        print(f"股票 {code} | Leek共振指数（≥88买入 / ≤44清仓，预热{warmup}日）")
     else:
         warmup_start = dates[max(ws_idx - 1, 0)]
         forward_start = dates[min(we_idx + 1, len(dates) - 1)]
@@ -147,7 +147,7 @@ def main():
         ("forward", forward_start, DATA_END, "Run3 锁参后入场（看到战绩才抄作业）"),
     ]
 
-    strategy_desc = ("韭菜共振指数LRI(88/44)" if strategy_name == "lri"
+    strategy_desc = ("Leek共振指数(88/44)" if strategy_name == "lri"
                      else f"追涨+{buy_pct:g}%/杀跌-{sell_pct:g}%")
 
     all_summaries = {}

@@ -1,9 +1,11 @@
 """数据引擎 - Data engine for fetching and caching stock data from AkShare."""
 
+import json
 import os
-from datetime import date
+import threading
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -26,13 +28,139 @@ class DataEngine:
             cache_dir: 缓存目录路径，默认为 ./data_cache
         """
         self.cache_dir = Path(cache_dir)
+        self._cache_lock = threading.RLock()
         self._stock_list_cache: list[StockInfo] = []
+        self._stock_name_map: dict[str, str] | None = None
         self._ensure_cache_dirs()
+        self._register_legacy_daily_cache()
     
     def _ensure_cache_dirs(self) -> None:
         """确保缓存目录存在"""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         (self.cache_dir / "intraday").mkdir(parents=True, exist_ok=True)
+
+    def _manifest_path(self) -> Path:
+        """返回日线缓存覆盖清单路径。"""
+        return self.cache_dir / "daily_cache_manifest.json"
+
+    def _load_manifest(self) -> dict[str, Any]:
+        path = self._manifest_path()
+        if not path.exists():
+            return {"version": 1, "entries": {}}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data.get("entries"), dict):
+                raise ValueError("invalid cache manifest")
+            return data
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {"version": 1, "entries": {}}
+
+    def _save_manifest(self, manifest: dict[str, Any]) -> None:
+        path = self._manifest_path()
+        temp_path = path.with_suffix(".tmp")
+        temp_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temp_path.replace(path)
+
+    @staticmethod
+    def _merge_ranges(ranges: list[tuple[date, date]]) -> list[tuple[date, date]]:
+        if not ranges:
+            return []
+        ordered = sorted(ranges, key=lambda item: item[0])
+        merged = [ordered[0]]
+        for start, end in ordered[1:]:
+            previous_start, previous_end = merged[-1]
+            if start <= previous_end + timedelta(days=1):
+                merged[-1] = (previous_start, max(previous_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    @staticmethod
+    def _missing_ranges(
+        start_date: date,
+        end_date: date,
+        covered_ranges: list[tuple[date, date]],
+    ) -> list[tuple[date, date]]:
+        missing: list[tuple[date, date]] = []
+        cursor = start_date
+        for covered_start, covered_end in DataEngine._merge_ranges(covered_ranges):
+            if covered_end < cursor:
+                continue
+            if covered_start > end_date:
+                break
+            if covered_start > cursor:
+                missing.append((cursor, min(end_date, covered_start - timedelta(days=1))))
+            cursor = max(cursor, covered_end + timedelta(days=1))
+            if cursor > end_date:
+                break
+        if cursor <= end_date:
+            missing.append((cursor, end_date))
+        return missing
+
+    def _manifest_ranges(self, code: str, adjust: str) -> list[tuple[date, date]]:
+        manifest = self._load_manifest()
+        entry = manifest["entries"].get(f"{code}:{adjust or 'raw'}", {})
+        ranges = []
+        for item in entry.get("ranges", []):
+            try:
+                ranges.append((date.fromisoformat(item["start"]), date.fromisoformat(item["end"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return self._merge_ranges(ranges)
+
+    def _record_cached_range(
+        self,
+        code: str,
+        start_date: date,
+        end_date: date,
+        adjust: str,
+    ) -> None:
+        with self._cache_lock:
+            manifest = self._load_manifest()
+            key = f"{code}:{adjust or 'raw'}"
+            entry = manifest["entries"].get(key, {})
+            ranges = self._manifest_ranges(code, adjust)
+            ranges.append((start_date, end_date))
+            entry.update({
+                "code": code,
+                "adjust": adjust or "raw",
+                "updated_at": __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds"),
+                "ranges": [
+                    {"start": start.isoformat(), "end": end.isoformat()}
+                    for start, end in self._merge_ranges(ranges)
+                ],
+            })
+            manifest["entries"][key] = entry
+            self._save_manifest(manifest)
+
+    def _register_legacy_daily_cache(self) -> None:
+        """把旧版只有 CSV、没有覆盖清单的日线缓存纳入管理。"""
+        manifest = self._load_manifest()
+        known_keys = set(manifest["entries"])
+        for path in self.cache_dir.glob("*.csv"):
+            if path.name == "stock_list.csv":
+                continue
+            stem_parts = path.stem.rsplit("_", 1)
+            if len(stem_parts) != 2:
+                continue
+            code, adjust = stem_parts
+            if not (code.isdigit() and len(code) == 6):
+                continue
+            key = f"{code}:{adjust}"
+            if key in known_keys:
+                continue
+            try:
+                frame = pd.read_csv(path, usecols=["date"])
+                parsed = pd.to_datetime(frame["date"], errors="raise").dt.date
+                if parsed.empty:
+                    continue
+                self._record_cached_range(code, min(parsed), max(parsed), adjust)
+                known_keys.add(key)
+            except Exception:
+                continue
     
     def normalize_code(self, code: str) -> tuple[str, str]:
         """
@@ -167,8 +295,26 @@ class DataEngine:
             pd.DataFrame(
                 [{"code": s.code, "name": s.name, "market": s.market} for s in stock_list]
             ).to_csv(self._stock_list_cache_path(), index=False)
+            self._stock_name_map = {stock.code: stock.name for stock in stock_list}
         except Exception:
             pass
+
+    def get_cached_stock_name(self, code: str) -> Optional[str]:
+        """从本地股票列表读取名称，不为展示名称触发网络请求。"""
+        pure_code, _ = self.normalize_code(code)
+        if self._stock_name_map is None:
+            self._stock_name_map = {}
+            path = self._stock_list_cache_path()
+            if path.exists():
+                try:
+                    frame = pd.read_csv(path, dtype={"code": str}, usecols=["code", "name"])
+                    self._stock_name_map = {
+                        str(row["code"]).zfill(6): str(row["name"])
+                        for _, row in frame.iterrows()
+                    }
+                except Exception:
+                    self._stock_name_map = {}
+        return self._stock_name_map.get(pure_code)
     
     def get_daily_data(
         self,
@@ -200,35 +346,159 @@ class DataEngine:
                 f"起始日期 {start_date} 不能晚于结束日期 {end_date}"
             )
         
-        # 规范化股票代码
-        pure_code, market = self.normalize_code(code)
-        
-        # 尝试从缓存加载
-        cached_data = self._load_from_cache(pure_code, start_date, end_date, adjust)
-        if cached_data is not None:
-            return cached_data
-        
-        # 从 AkShare 获取数据（东方财富接口，失败时回退到腾讯接口）
-        try:
-            df = self._fetch_daily_from_eastmoney(pure_code, start_date, end_date, adjust)
-        except InvalidStockCodeError:
-            raise
-        except Exception as em_error:
-            try:
-                df = self._fetch_daily_from_tencent(pure_code, market, start_date, end_date, adjust)
-            except Exception as tx_error:
-                raise DataFetchError(
-                    f"获取股票 {code} 日线数据失败: "
-                    f"东方财富接口: {str(em_error)}; 腾讯接口: {str(tx_error)}"
-                ) from tx_error
+        self.ensure_daily_cache(code, start_date, end_date, adjust)
+        return self.get_cached_daily_data(code, start_date, end_date, adjust)
 
-        if df.empty:
+    def get_cached_daily_data(
+        self,
+        code: str,
+        start_date: date,
+        end_date: date,
+        adjust: str = "qfq",
+        require_complete: bool = True,
+    ) -> pd.DataFrame:
+        """只读本地日线缓存，不触发任何网络请求。"""
+        if start_date > end_date:
+            raise InvalidDateRangeError(
+                f"起始日期 {start_date} 不能晚于结束日期 {end_date}"
+            )
+        pure_code, _ = self.normalize_code(code)
+        status = self.get_cache_status(pure_code, start_date, end_date, adjust)
+        if require_complete and not status["complete"]:
+            gaps = ", ".join(
+                f"{item['start']} 至 {item['end']}" for item in status["missing_ranges"]
+            )
+            raise DataFetchError(f"本地缓存不完整，缺少：{gaps}")
+
+        cached = self._load_from_cache(pure_code, start_date, end_date, adjust)
+        if cached is None:
             return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+        return cached
 
-        # 保存到缓存
-        self._save_to_cache(pure_code, df, adjust)
+    def ensure_daily_cache(
+        self,
+        code: str,
+        start_date: date,
+        end_date: date,
+        adjust: str = "qfq",
+    ) -> dict[str, Any]:
+        """显式下载并补齐指定区间，返回下载后的覆盖状态。"""
+        if start_date > end_date:
+            raise InvalidDateRangeError(
+                f"起始日期 {start_date} 不能晚于结束日期 {end_date}"
+            )
+        pure_code, market = self.normalize_code(code)
+        missing = self._missing_ranges(
+            start_date,
+            end_date,
+            self._manifest_ranges(pure_code, adjust),
+        )
 
-        return df
+        for gap_start, gap_end in missing:
+            try:
+                df = self._fetch_daily_from_eastmoney(
+                    pure_code, gap_start, gap_end, adjust
+                )
+            except InvalidStockCodeError:
+                raise
+            except Exception as em_error:
+                try:
+                    df = self._fetch_daily_from_tencent(
+                        pure_code, market, gap_start, gap_end, adjust
+                    )
+                except Exception as tx_error:
+                    raise DataFetchError(
+                        f"获取股票 {code} 日线数据失败: "
+                        f"东方财富接口: {str(em_error)}; 腾讯接口: {str(tx_error)}"
+                    ) from tx_error
+
+            if not df.empty:
+                self._save_to_cache(pure_code, df, adjust)
+            # 数据源已成功回答该请求。区间内可能只有周末、停牌日或尚未上市日期，
+            # 因此覆盖清单记录“已查询区间”，不能只根据 CSV 首尾日期推断。
+            self._record_cached_range(pure_code, gap_start, gap_end, adjust)
+
+        return self.get_cache_status(pure_code, start_date, end_date, adjust)
+
+    def get_cache_status(
+        self,
+        code: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        adjust: str = "qfq",
+    ) -> dict[str, Any]:
+        """返回单只股票的本地日线覆盖范围和请求缺口。"""
+        pure_code, _ = self.normalize_code(code)
+        ranges = self._manifest_ranges(pure_code, adjust)
+        missing: list[tuple[date, date]] = []
+        if start_date is not None and end_date is not None:
+            if start_date > end_date:
+                raise InvalidDateRangeError(
+                    f"起始日期 {start_date} 不能晚于结束日期 {end_date}"
+                )
+            missing = self._missing_ranges(start_date, end_date, ranges)
+
+        cache_path = self._get_cache_path(pure_code, adjust)
+        row_count = 0
+        data_start = None
+        data_end = None
+        if cache_path.exists():
+            try:
+                df = pd.read_csv(cache_path, usecols=["date"])
+                if not df.empty:
+                    parsed = pd.to_datetime(df["date"]).dt.date
+                    row_count = len(df)
+                    data_start = min(parsed).isoformat()
+                    data_end = max(parsed).isoformat()
+            except Exception:
+                pass
+
+        return {
+            "code": pure_code,
+            "name": self.get_cached_stock_name(pure_code),
+            "adjust": adjust or "raw",
+            "complete": not missing if start_date is not None and end_date is not None else bool(ranges),
+            "ranges": [
+                {"start": range_start.isoformat(), "end": range_end.isoformat()}
+                for range_start, range_end in ranges
+            ],
+            "missing_ranges": [
+                {"start": gap_start.isoformat(), "end": gap_end.isoformat()}
+                for gap_start, gap_end in missing
+            ],
+            "row_count": row_count,
+            "data_start": data_start,
+            "data_end": data_end,
+            "file_size": cache_path.stat().st_size if cache_path.exists() else 0,
+        }
+
+    def list_daily_cache(self) -> list[dict[str, Any]]:
+        """列出所有由覆盖清单管理的日线缓存。"""
+        manifest = self._load_manifest()
+        result = []
+        for entry in manifest["entries"].values():
+            code = entry.get("code")
+            adjust = entry.get("adjust", "qfq")
+            if not code:
+                continue
+            status = self.get_cache_status(code, adjust=adjust)
+            status["updated_at"] = entry.get("updated_at")
+            result.append(status)
+        return sorted(result, key=lambda item: (item["code"], item["adjust"]))
+
+    def delete_daily_cache(self, code: str, adjust: str = "qfq") -> bool:
+        """删除单只股票指定复权方式的日线缓存及覆盖记录。"""
+        pure_code, _ = self.normalize_code(code)
+        with self._cache_lock:
+            path = self._get_cache_path(pure_code, adjust)
+            existed = path.exists()
+            path.unlink(missing_ok=True)
+
+            manifest = self._load_manifest()
+            key = f"{pure_code}:{adjust or 'raw'}"
+            existed = manifest["entries"].pop(key, None) is not None or existed
+            self._save_manifest(manifest)
+            return existed
 
     def _fetch_daily_from_eastmoney(
         self,
@@ -567,21 +837,19 @@ class DataEngine:
 
         cache_path = self._get_cache_path(code, adjust)
         
-        try:
+        with self._cache_lock:
             # 如果缓存已存在，合并数据
             if cache_path.exists():
                 existing_df = pd.read_csv(cache_path)
                 existing_df["date"] = pd.to_datetime(existing_df["date"]).dt.date
-                
+
                 # 合并并去重
                 combined = pd.concat([existing_df, data], ignore_index=True)
                 combined = combined.drop_duplicates(subset=["date"], keep="last")
                 combined = combined.sort_values("date").reset_index(drop=True)
                 data = combined
-            
-            # 保存到 CSV
-            data.to_csv(cache_path, index=False)
-            
-        except Exception:
-            # 保存失败时静默处理，不影响主流程
-            pass
+
+            # 先写临时文件再替换，避免中断时留下半个 CSV。
+            temp_path = cache_path.with_suffix(".tmp")
+            data.to_csv(temp_path, index=False)
+            temp_path.replace(cache_path)

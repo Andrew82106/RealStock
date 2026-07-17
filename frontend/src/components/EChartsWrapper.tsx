@@ -8,7 +8,22 @@
  */
 import { useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
-import * as echarts from 'echarts';
+import * as echarts from 'echarts/core';
+import type { EChartsType } from 'echarts/core';
+import { BarChart, CandlestickChart, LineChart } from 'echarts/charts';
+import { DataZoomComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+
+echarts.use([
+  BarChart,
+  CandlestickChart,
+  LineChart,
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 interface EChartsWrapperProps {
   option: Record<string, unknown>;
@@ -26,7 +41,7 @@ export default function EChartsWrapper({
   theme,
 }: EChartsWrapperProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts | null>(null);
+  const chartRef = useRef<EChartsType | null>(null);
   const optionRef = useRef({ option, notMerge, lazyUpdate });
   optionRef.current = { option, notMerge, lazyUpdate };
 

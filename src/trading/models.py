@@ -38,6 +38,7 @@ class Order:
     order_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])  # 订单ID
     frozen_cash: float = 0.0                    # 冻结资金（买单）
     frozen_quantity: int = 0                    # 冻结股票数量（卖单）
+    filled_date: Optional[date] = None          # 实际成交日期
 
 
 @dataclass

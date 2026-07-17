@@ -120,11 +120,11 @@ class TradingEngine:
 
         if current_price is None:
             # 回测/直接成交模式：立即以委托价成交
-            self._execute_buy(order, price)
+            self._execute_buy(order, price, current_date)
             self.trade_log.append(order)
         elif price >= current_price:
             # 委托价 >= 当前价，立即以当前价成交
-            self._execute_buy(order, current_price)
+            self._execute_buy(order, current_price, current_date)
             self.trade_log.append(order)
         else:
             # 加入挂单列表
@@ -210,11 +210,11 @@ class TradingEngine:
 
         if current_price is None:
             # 回测/直接成交模式：立即以委托价成交
-            self._execute_sell(order, price)
+            self._execute_sell(order, price, current_date)
             self.trade_log.append(order)
         elif price <= current_price:
             # 委托价 <= 当前价，立即以当前价成交
-            self._execute_sell(order, current_price)
+            self._execute_sell(order, current_price, current_date)
             self.trade_log.append(order)
         else:
             # 加入挂单列表
@@ -240,7 +240,11 @@ class TradingEngine:
                 return True
         return False
     
-    def check_pending_orders(self, prices: dict[str, float]) -> list[Order]:
+    def check_pending_orders(
+        self,
+        prices: dict[str, float],
+        current_date: Optional[date] = None,
+    ) -> list[Order]:
         """
         检查挂单是否可以成交。
         
@@ -263,12 +267,12 @@ class TradingEngine:
             if order.order_type == OrderType.BUY:
                 # 买单：委托价 >= 当前价 时成交
                 if order.price >= current_price:
-                    self._execute_buy(order, current_price)
+                    self._execute_buy(order, current_price, current_date)
                     filled = True
             else:
                 # 卖单：委托价 <= 当前价 时成交
                 if order.price <= current_price:
-                    self._execute_sell(order, current_price)
+                    self._execute_sell(order, current_price, current_date)
                     filled = True
             
             if filled:
@@ -295,7 +299,12 @@ class TradingEngine:
         self.pending_orders = []
         return count
     
-    def _execute_buy(self, order: Order, fill_price: float) -> None:
+    def _execute_buy(
+        self,
+        order: Order,
+        fill_price: float,
+        fill_date: Optional[date] = None,
+    ) -> None:
         """
         执行买入，更新账户。
         
@@ -341,9 +350,15 @@ class TradingEngine:
         order.status = OrderStatus.FILLED
         order.filled_price = fill_price
         order.filled_quantity = order.quantity
+        order.filled_date = fill_date or order.order_date
         order.fee = fee
 
-    def _execute_sell(self, order: Order, fill_price: float) -> None:
+    def _execute_sell(
+        self,
+        order: Order,
+        fill_price: float,
+        fill_date: Optional[date] = None,
+    ) -> None:
         """
         执行卖出，更新账户。
         
@@ -369,6 +384,7 @@ class TradingEngine:
         order.status = OrderStatus.FILLED
         order.filled_price = fill_price
         order.filled_quantity = order.quantity
+        order.filled_date = fill_date or order.order_date
         order.fee = fee
         order.frozen_quantity = 0
 
@@ -385,7 +401,7 @@ class TradingEngine:
         with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([
-                'order_id', 'order_date', 'code', 'order_type', 'price', 'quantity',
+                'order_id', 'order_date', 'filled_date', 'code', 'order_type', 'price', 'quantity',
                 'status', 'filled_price', 'filled_quantity', 'fee', 'reject_reason'
             ])
             
@@ -393,6 +409,7 @@ class TradingEngine:
                 writer.writerow([
                     order.order_id,
                     order.order_date.isoformat(),
+                    order.filled_date.isoformat() if order.filled_date else '',
                     order.code,
                     order.order_type.value,
                     order.price,
